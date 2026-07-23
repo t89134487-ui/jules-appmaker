@@ -19,6 +19,7 @@ import { logger } from '../services/logger';
 interface ChatScreenProps {
   julesService: JulesService;
   selectedRepo: GitHubRepo;
+  initialSessionId?: string | null;
   onSessionStarted: (sessionId: string) => void;
   onBack: () => void;
 }
@@ -26,6 +27,7 @@ interface ChatScreenProps {
 export const ChatScreen: React.FC<ChatScreenProps> = ({
   julesService,
   selectedRepo,
+  initialSessionId,
   onSessionStarted,
   onBack,
 }) => {
@@ -51,6 +53,24 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       console.warn('Failed to poll session state', e);
     }
   };
+
+  // Load existing session if specified on entry
+  useEffect(() => {
+    if (initialSessionId) {
+      logger.info(`Resuming existing session thread: ${initialSessionId}`);
+      setLoading(true);
+      fetchSessionState(initialSessionId)
+        .then(() => {
+          onSessionStarted(initialSessionId);
+        })
+        .finally(() => {
+          setLoading(false);
+        });
+    } else {
+      setSession(null);
+      setActivities([]);
+    }
+  }, [initialSessionId]);
 
   // Poll active sessions
   useEffect(() => {

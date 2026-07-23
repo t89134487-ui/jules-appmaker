@@ -18,7 +18,7 @@ import { logger } from '../services/logger';
 interface DashboardScreenProps {
   githubService: GitHubService;
   julesService: JulesService | null;
-  onSelectRepo: (repo: GitHubRepo) => void;
+  onSelectRepo: (repo: GitHubRepo, sessionId?: string) => void;
   onLogout: () => void;
 }
 
@@ -41,6 +41,13 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
   const [guideModalVisible, setGuideModalVisible] = useState(false);
   const [justCreatedRepo, setJustCreatedRepo] = useState<GitHubRepo | null>(null);
 
+  // Thread list modal fields
+  const [allSessions, setAllSessions] = useState<any[]>([]);
+  const [repoSessions, setRepoSessions] = useState<any[]>([]);
+  const [threadsModalVisible, setThreadsModalVisible] = useState(false);
+  const [threadLoading, setThreadLoading] = useState(false);
+  const [targetRepoForThreads, setTargetRepoForThreads] = useState<GitHubRepo | null>(null);
+
   const fetchRepos = async () => {
     setLoading(true);
     try {
@@ -53,6 +60,11 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
         const sources = await julesService.getSources();
         setConnectedSources(sources);
         logger.info(`Found ${sources.length} connected Jules sources.`);
+
+        logger.info('Fetching Jules active sessions/threads...');
+        const sessions = await julesService.getSessions();
+        setAllSessions(sessions);
+        logger.info(`Found ${sessions.length} sessions/threads in total.`);
       }
     } catch (e: any) {
       logger.error(`Error fetching resources: ${e.message}`);
@@ -117,7 +129,25 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
       setJustCreatedRepo(repo);
       setGuideModalVisible(true);
     } else {
-      onSelectRepo(repo);
+      // Get the exact connected source identifier for this repo
+      const targetSourceId = `github-${repo.owner.login}-${repo.name}`.toLowerCase();
+
+      // Filter sessions/threads that match this specific repository source.
+      // In Jules API, session objects contain their connected source URI inside properties.
+      // But since some fields may vary, we filter sessions matching the repo name/owner.
+      const matchedThreads = allSessions.filter((sess) => {
+        const sourceCtx = sess.sourceContext?.source || '';
+        const lowerSource = sourceCtx.toLowerCase();
+
+        return (
+          lowerSource.includes(repo.name.toLowerCase()) &&
+          lowerSource.includes(repo.owner.login.toLowerCase())
+        );
+      });
+
+      setRepoSessions(matchedThreads);
+      setTargetRepoForThreads(repo);
+      setThreadsModalVisible(true);
     }
   };
 
@@ -250,6 +280,84 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
         </View>
       </Modal>
 
+      {/* MODAL: Thread Selector Modal (Resume Thread or New App) */}
+      <Modal
+        visible={threadsModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setThreadsModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContentLarge}>
+            <View style={styles.modalHeaderRow}>
+              <Text style={styles.modalTitle}>🧵 Choose Thread</Text>
+              <TouchableOpacity
+                style={styles.closeModalTextBtn}
+                onPress={() => setThreadsModalVisible(false)}
+              >
+                <Text style={styles.closeModalText}>✕ Close</Text>
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.guideStep}>
+              Selected Repo: <Text style={styles.bold}>{targetRepoForThreads?.name}</Text>
+            </Text>
+
+            <TouchableOpacity
+              style={styles.newThreadBtn}
+              onPress={() => {
+                setThreadsModalVisible(false);
+                if (targetRepoForThreads) {
+                  onSelectRepo(targetRepoForThreads); // Start clean session
+                }
+              }}
+            >
+              <Text style={styles.newThreadBtnText}>🚀 Start New Session (Fresh Chat)</Text>
+            </TouchableOpacity>
+
+            <Text style={styles.sectionLabel}>Resume Active Session Threads ({repoSessions.length}):</Text>
+
+            <FlatList
+              data={repoSessions}
+              keyExtractor={(item) => item.id}
+              style={styles.threadsFlatList}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={styles.threadCard}
+                  onPress={() => {
+                    setThreadsModalVisible(false);
+                    if (targetRepoForThreads) {
+                      onSelectRepo(targetRepoForThreads, item.id); // Resume session
+                    }
+                  }}
+                >
+                  <View style={styles.threadHeader}>
+                    <Text style={styles.threadTitle} numberOfLines={1}>
+                      {item.title || `Session ${item.id}`}
+                    </Text>
+                    <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item.state) }]}>
+                      <Text style={styles.statusBadgeText}>{item.state}</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.threadPrompt} numberOfLines={2}>
+                    {item.prompt}
+                  </Text>
+                  <Text style={styles.threadMeta}>
+                    Last updated: {new Date(item.updateTime || item.createTime).toLocaleString()}
+                  </Text>
+                </TouchableOpacity>
+              )}
+              ListEmptyComponent={
+                <View style={styles.emptyThreads}>
+                  <Text style={styles.emptyThreadsText}>No existing sessions found for this repo.</Text>
+                  <Text style={styles.emptyThreadsSub}>Click "Start New Session" above to launch!</Text>
+                </View>
+              }
+            />
+          </View>
+        </View>
+      </Modal>
+
       {/* MODAL: Guide Instruction for Jules connection */}
       <Modal
         visible={guideModalVisible}
@@ -297,6 +405,24 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
       </Modal>
     </View>
   );
+};
+
+const getStatusColor = (state: string) => {
+  switch (state) {
+    case 'QUEUED':
+      return '#f59e0b';
+    case 'PLANNING':
+    case 'IN_PROGRESS':
+      return '#3b82f6';
+    case 'AWAITING_PLAN_APPROVAL':
+      return '#ec4899';
+    case 'COMPLETED':
+      return '#10b981';
+    case 'FAILED':
+      return '#ef4444';
+    default:
+      return '#71717a';
+  }
 };
 
 const styles = StyleSheet.create({
@@ -414,6 +540,101 @@ const styles = StyleSheet.create({
   disconnectedText: {
     color: '#f59e0b',
     backgroundColor: 'rgba(245, 158, 11, 0.1)',
+  },
+  modalHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  closeModalTextBtn: {
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    backgroundColor: '#2e2e33',
+    borderRadius: 6,
+  },
+  closeModalText: {
+    color: '#a0a0ab',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  newThreadBtn: {
+    backgroundColor: '#10b981',
+    borderRadius: 8,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginTop: 10,
+    marginBottom: 20,
+  },
+  newThreadBtnText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 14,
+  },
+  sectionLabel: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: 'bold',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 10,
+  },
+  threadsFlatList: {
+    maxHeight: 280,
+  },
+  threadCard: {
+    backgroundColor: '#121214',
+    borderWidth: 1,
+    borderColor: '#2e2e33',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 10,
+  },
+  threadHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  threadTitle: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: 'bold',
+    flex: 1,
+    marginRight: 8,
+  },
+  statusBadge: {
+    paddingVertical: 2,
+    paddingHorizontal: 6,
+    borderRadius: 4,
+  },
+  statusBadgeText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: 'bold',
+  },
+  threadPrompt: {
+    color: '#a0a0ab',
+    fontSize: 12,
+    lineHeight: 16,
+    marginBottom: 6,
+  },
+  threadMeta: {
+    color: '#52525b',
+    fontSize: 10,
+  },
+  emptyThreads: {
+    alignItems: 'center',
+    paddingVertical: 20,
+  },
+  emptyThreadsText: {
+    color: '#71717a',
+    fontSize: 12,
+  },
+  emptyThreadsSub: {
+    color: '#52525b',
+    fontSize: 11,
+    marginTop: 4,
   },
   center: {
     flex: 1,
