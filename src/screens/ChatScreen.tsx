@@ -1,0 +1,595 @@
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  StyleSheet,
+  Text,
+  View,
+  ScrollView,
+  TextInput,
+  TouchableOpacity,
+  ActivityIndicator,
+  FlatList,
+  KeyboardAvoidingView,
+  Platform,
+  Alert,
+} from 'react-native';
+import { JulesService, JulesSession, JulesActivity } from '../services/jules';
+import { GitHubRepo } from '../services/github';
+
+interface ChatScreenProps {
+  julesService: JulesService;
+  selectedRepo: GitHubRepo;
+  onSessionStarted: (sessionId: string) => void;
+  onBack: () => void;
+}
+
+export const ChatScreen: React.FC<ChatScreenProps> = ({
+  julesService,
+  selectedRepo,
+  onSessionStarted,
+  onBack,
+}) => {
+  const [session, setSession] = useState<JulesSession | null>(null);
+  const [activities, setActivities] = useState<JulesActivity[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  // Initial prompt state
+  const [initialPrompt, setInitialPrompt] = useState('');
+
+  const scrollRef = useRef<ScrollView>(null);
+
+  const fetchSessionState = async (id: string) => {
+    try {
+      const sess = await julesService.getSession(id);
+      setSession(sess);
+
+      const acts = await julesService.getActivities(id);
+      setActivities(acts);
+    } catch (e: any) {
+      console.warn('Failed to poll session state', e);
+    }
+  };
+
+  // Poll active sessions
+  useEffect(() => {
+    if (!session) return;
+    const interval = setInterval(() => {
+      fetchSessionState(session.id);
+    }, 4500);
+
+    return () => clearInterval(interval);
+  }, [session?.id]);
+
+  const handleStartSession = async () => {
+    if (!initialPrompt.trim()) {
+      Alert.alert('Error', 'Please describe the app you want to build');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      // Append core CI generation prompt instructions autonomously!
+      const augmentedPrompt = `${initialPrompt.trim()}
+
+      ## MANDATORY REQUIREMENTS
+      - You must create a complete GitHub Actions CI pipeline in \`.github/workflows/build-main-apk.yml\` to build the React Native / Expo application and generate a test-key signed production/debug APK.
+      - Make sure the workflow builds and exports the APK as a Release Asset in a new GitHub release tag (e.g. upload to a release) so the user can easily install/download it.
+      - Generate all necessary code scaffolding from scratch. Ensure clean directory structure.`;
+
+      const newSession = await julesService.createSession({
+        prompt: augmentedPrompt,
+        repoOwner: selectedRepo.owner.login,
+        repoName: selectedRepo.name,
+        branch: selectedRepo.default_branch,
+        requirePlanApproval: true,
+      });
+
+      setSession(newSession);
+      onSessionStarted(newSession.id);
+      await fetchSessionState(newSession.id);
+    } catch (e: any) {
+      Alert.alert('Failed to Start Jules Session', e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSendMessage = async () => {
+    if (!message.trim() || !session) return;
+    setSubmitting(true);
+    const textToSend = message.trim();
+    setMessage('');
+    try {
+      await julesService.sendMessage(session.id, textToSend);
+      await fetchSessionState(session.id);
+    } catch (e: any) {
+      Alert.alert('Error Sending Message', e.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleApprovePlan = async () => {
+    if (!session) return;
+    setSubmitting(true);
+    try {
+      await julesService.approvePlan(session.id);
+      Alert.alert('Success', 'Plan approved! Jules will now execute the tasks.');
+      await fetchSessionState(session.id);
+    } catch (e: any) {
+      Alert.alert('Failed to Approve Plan', e.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // Helper to render activity logs/messages
+  const renderActivityItem = (act: JulesActivity) => {
+    if (act.userMessaged) {
+      return (
+        <View key={act.id} style={[styles.msgRow, styles.msgUser]}>
+          <Text style={styles.msgLabel}>You</Text>
+          <Text style={styles.msgText}>{act.userMessaged.userMessage}</Text>
+        </View>
+      );
+    }
+
+    if (act.agentMessaged) {
+      return (
+        <View key={act.id} style={[styles.msgRow, styles.msgAgent]}>
+          <Text style={styles.msgLabelAgent}>Jules</Text>
+          <Text style={styles.msgTextAgent}>{act.agentMessaged.agentMessage}</Text>
+        </View>
+      );
+    }
+
+    if (act.planGenerated) {
+      const plan = act.planGenerated.plan;
+      return (
+        <View key={act.id} style={styles.planCard}>
+          <Text style={styles.planTitle}>📋 Proposed Development Plan</Text>
+          {plan.steps.map((step) => (
+            <View key={step.id} style={styles.stepItem}>
+              <Text style={styles.stepIndex}>{step.index + 1}. {step.title}</Text>
+              <Text style={styles.stepDesc}>{step.description}</Text>
+            </View>
+          ))}
+
+          {session?.state === 'AWAITING_PLAN_APPROVAL' ? (
+            <TouchableOpacity style={styles.approveBtn} onPress={handleApprovePlan} disabled={submitting}>
+              {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.approveBtnText}>Approve Plan & Run Build</Text>}
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.approvedBadge}>
+              <Text style={styles.approvedBadgeText}>✓ Plan Approved</Text>
+            </View>
+          )}
+        </View>
+      );
+    }
+
+    if (act.progressUpdated) {
+      return (
+        <View key={act.id} style={styles.progressCard}>
+          <Text style={styles.progressTitle}>⚡ Progress: {act.progressUpdated.title}</Text>
+          <Text style={styles.progressDesc}>{act.progressUpdated.description}</Text>
+        </View>
+      );
+    }
+
+    if (act.sessionCompleted) {
+      return (
+        <View key={act.id} style={styles.completedCard}>
+          <Text style={styles.completedTitle}>🏆 Task Complete!</Text>
+          <Text style={styles.completedDesc}>Jules has successfully generated the code and push committed it to your repo.</Text>
+        </View>
+      );
+    }
+
+    if (act.sessionFailed) {
+      return (
+        <View key={act.id} style={styles.failedCard}>
+          <Text style={styles.failedTitle}>❌ Session Failed</Text>
+          <Text style={styles.failedDesc}>{act.sessionFailed.reason}</Text>
+        </View>
+      );
+    }
+
+    return null;
+  };
+
+  // If no session active, show creation panel
+  if (!session) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={onBack}>
+            <Text style={styles.backText}>← Repos</Text>
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>{selectedRepo.name}</Text>
+          <View style={{ width: 40 }} />
+        </View>
+
+        <ScrollView contentContainerStyle={styles.centerContainer}>
+          <Text style={styles.scaffoldTitle}>🚀 Launch Autonomous Dev</Text>
+          <Text style={styles.scaffoldDesc}>
+            Tell Jules what app you want to build. Jules will design the code, create the app boilerplate, and build a test-signed APK with GitHub Actions CI.
+          </Text>
+
+          <TextInput
+            style={styles.scaffoldInput}
+            placeholder="e.g. Build a gorgeous calculator app with dark mode, scientific functions, and clear animations."
+            placeholderTextColor="#888"
+            multiline
+            numberOfLines={5}
+            value={initialPrompt}
+            onChangeText={setInitialPrompt}
+          />
+
+          <TouchableOpacity style={styles.launchBtn} onPress={handleStartSession} disabled={loading}>
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.launchBtnText}>Create App with Jules</Text>
+            )}
+          </TouchableOpacity>
+        </ScrollView>
+      </View>
+    );
+  }
+
+  return (
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      style={styles.container}
+    >
+      {/* Header */}
+      <View style={styles.header}>
+        <TouchableOpacity onPress={onBack}>
+          <Text style={styles.backText}>← Back</Text>
+        </TouchableOpacity>
+        <View style={styles.headerMeta}>
+          <Text style={styles.headerTitle}>{selectedRepo.name}</Text>
+          <View style={styles.statusRow}>
+            <View style={[styles.statusDot, { backgroundColor: getStatusColor(session.state) }]} />
+            <Text style={styles.statusLabel}>{session.state}</Text>
+          </View>
+        </View>
+        <View style={{ width: 40 }} />
+      </View>
+
+      {/* Chat Area */}
+      <ScrollView
+        ref={scrollRef}
+        style={styles.chatArea}
+        contentContainerStyle={{ padding: 16 }}
+        onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
+      >
+        <View style={styles.systemBanner}>
+          <Text style={styles.systemBannerText}>
+            🤖 Autonomous session created. Jules is analyzing your repo and planning scaffolding.
+          </Text>
+        </View>
+
+        {activities.map(renderActivityItem)}
+      </ScrollView>
+
+      {/* Input bar */}
+      <View style={styles.inputBar}>
+        <TextInput
+          style={styles.chatInput}
+          placeholder="Send Jules a message..."
+          placeholderTextColor="#888"
+          value={message}
+          onChangeText={setMessage}
+          editable={!submitting}
+        />
+        <TouchableOpacity style={styles.sendBtn} onPress={handleSendMessage} disabled={submitting}>
+          {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.sendBtnText}>Send</Text>}
+        </TouchableOpacity>
+      </View>
+    </KeyboardAvoidingView>
+  );
+};
+
+const getStatusColor = (state: string) => {
+  switch (state) {
+    case 'QUEUED':
+      return '#f59e0b';
+    case 'PLANNING':
+    case 'IN_PROGRESS':
+      return '#3b82f6';
+    case 'AWAITING_PLAN_APPROVAL':
+      return '#ec4899';
+    case 'COMPLETED':
+      return '#10b981';
+    case 'FAILED':
+      return '#ef4444';
+    default:
+      return '#9ca3af';
+  }
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#121214',
+  },
+  header: {
+    height: 64,
+    borderBottomWidth: 1,
+    borderColor: '#1e1e24',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: Platform.OS === 'ios' ? 12 : 0,
+  },
+  backText: {
+    color: '#a0a0ab',
+    fontSize: 16,
+  },
+  headerTitle: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  headerMeta: {
+    alignItems: 'center',
+  },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 6,
+  },
+  statusLabel: {
+    color: '#a0a0ab',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  centerContainer: {
+    padding: 24,
+    justifyContent: 'center',
+    flexGrow: 1,
+  },
+  scaffoldTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#fff',
+    textAlign: 'center',
+    marginBottom: 12,
+  },
+  scaffoldDesc: {
+    fontSize: 14,
+    color: '#a0a0ab',
+    textAlign: 'center',
+    lineHeight: 22,
+    marginBottom: 24,
+  },
+  scaffoldInput: {
+    backgroundColor: '#1c1c1f',
+    borderColor: '#2e2e33',
+    borderWidth: 1,
+    borderRadius: 8,
+    color: '#fff',
+    padding: 16,
+    fontSize: 15,
+    minHeight: 120,
+    textAlignVertical: 'top',
+    marginBottom: 24,
+  },
+  launchBtn: {
+    backgroundColor: '#6200ee',
+    borderRadius: 8,
+    height: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  launchBtnText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  chatArea: {
+    flex: 1,
+  },
+  systemBanner: {
+    backgroundColor: '#1c1c1f',
+    borderColor: '#2e2e33',
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 16,
+  },
+  systemBannerText: {
+    color: '#a0a0ab',
+    fontSize: 13,
+    lineHeight: 18,
+    textAlign: 'center',
+  },
+  msgRow: {
+    maxWidth: '85%',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+  },
+  msgUser: {
+    backgroundColor: '#6200ee',
+    alignSelf: 'flex-end',
+  },
+  msgAgent: {
+    backgroundColor: '#1c1c1f',
+    borderWidth: 1,
+    borderColor: '#2e2e33',
+    alignSelf: 'flex-start',
+  },
+  msgLabel: {
+    color: '#c084fc',
+    fontWeight: 'bold',
+    fontSize: 11,
+    marginBottom: 4,
+  },
+  msgLabelAgent: {
+    color: '#6200ee',
+    fontWeight: 'bold',
+    fontSize: 11,
+    marginBottom: 4,
+  },
+  msgText: {
+    color: '#fff',
+    fontSize: 15,
+    lineHeight: 20,
+  },
+  msgTextAgent: {
+    color: '#fff',
+    fontSize: 15,
+    lineHeight: 20,
+  },
+  planCard: {
+    backgroundColor: '#1c1c1f',
+    borderWidth: 1,
+    borderColor: '#ec4899',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+  },
+  planTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#fff',
+    marginBottom: 12,
+  },
+  stepItem: {
+    marginBottom: 10,
+    borderLeftWidth: 2,
+    borderColor: '#e879f9',
+    paddingLeft: 12,
+  },
+  stepIndex: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#fff',
+  },
+  stepDesc: {
+    fontSize: 12,
+    color: '#a0a0ab',
+    marginTop: 2,
+  },
+  approveBtn: {
+    backgroundColor: '#ec4899',
+    borderRadius: 8,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 16,
+  },
+  approveBtnText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 14,
+  },
+  approvedBadge: {
+    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+    borderRadius: 8,
+    paddingVertical: 10,
+    alignItems: 'center',
+    marginTop: 16,
+    borderWidth: 1,
+    borderColor: '#10b981',
+  },
+  approvedBadgeText: {
+    color: '#10b981',
+    fontWeight: 'bold',
+  },
+  progressCard: {
+    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+    borderWidth: 1,
+    borderColor: '#3b82f6',
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 12,
+  },
+  progressTitle: {
+    color: '#3b82f6',
+    fontWeight: 'bold',
+    fontSize: 14,
+    marginBottom: 4,
+  },
+  progressDesc: {
+    color: '#a0a0ab',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  completedCard: {
+    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+    borderWidth: 1,
+    borderColor: '#10b981',
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 12,
+  },
+  completedTitle: {
+    color: '#10b981',
+    fontWeight: 'bold',
+    fontSize: 14,
+    marginBottom: 4,
+  },
+  completedDesc: {
+    color: '#a0a0ab',
+    fontSize: 12,
+  },
+  failedCard: {
+    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+    borderWidth: 1,
+    borderColor: '#ef4444',
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 12,
+  },
+  failedTitle: {
+    color: '#ef4444',
+    fontWeight: 'bold',
+    fontSize: 14,
+    marginBottom: 4,
+  },
+  failedDesc: {
+    color: '#a0a0ab',
+    fontSize: 12,
+  },
+  inputBar: {
+    borderTopWidth: 1,
+    borderColor: '#1e1e24',
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#121214',
+  },
+  chatInput: {
+    flex: 1,
+    backgroundColor: '#1c1c1f',
+    borderRadius: 8,
+    color: '#fff',
+    height: 44,
+    paddingHorizontal: 16,
+    marginRight: 10,
+  },
+  sendBtn: {
+    backgroundColor: '#6200ee',
+    borderRadius: 8,
+    height: 44,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sendBtnText: {
+    color: '#fff',
+    fontWeight: 'bold',
+  },
+});
