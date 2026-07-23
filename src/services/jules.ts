@@ -156,9 +156,38 @@ export class JulesService {
     branch?: string;
     requirePlanApproval?: boolean;
   }): Promise<JulesSession> {
-    // Construct the source resource name format expected by Jules: sources/github-owner-repo
-    const sourceId = `github-${options.repoOwner}-${options.repoName}`.toLowerCase();
-    const sourcePath = `sources/${sourceId}`;
+    // Dynamically look up connected sources first to match the exact source identifier
+    // to avoid formatting mismatches causing 404 errors.
+    let sourcePath = '';
+    try {
+      logger.info(`Looking up source name for ${options.repoOwner}/${options.repoName}...`);
+      const sources = await this.getSources();
+      const match = sources.find((src) => {
+        if (src.githubRepo) {
+          return (
+            src.githubRepo.owner.toLowerCase() === options.repoOwner.toLowerCase() &&
+            src.githubRepo.repo.toLowerCase() === options.repoName.toLowerCase()
+          );
+        }
+        return false;
+      });
+
+      if (match) {
+        sourcePath = match.name;
+        logger.info(`Source matched on Jules! Using exact source identifier: "${sourcePath}"`);
+      } else {
+        logger.warn(`Source not found in Jules connected sources list.`);
+      }
+    } catch (err: any) {
+      logger.warn(`Failed to dynamically fetch sources for matching: ${err.message}`);
+    }
+
+    // Fallback to formatted string if dynamic match failed
+    if (!sourcePath) {
+      const sourceId = `github-${options.repoOwner}-${options.repoName}`.toLowerCase();
+      sourcePath = `sources/${sourceId}`;
+      logger.info(`Using fallback formatted source path: "${sourcePath}"`);
+    }
 
     return this.fetchWithAuth(`${this.baseUrl}/sessions`, {
       method: 'POST',

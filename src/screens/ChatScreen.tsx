@@ -72,12 +72,14 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     setLoading(true);
     try {
       // Append core CI generation prompt instructions autonomously!
+      // Letting Jules decide the language, framework, and toolchain autonomously (e.g. Jetpack Compose/Kotlin, Flutter, etc.)
       const augmentedPrompt = `${initialPrompt.trim()}
 
       ## MANDATORY REQUIREMENTS
-      - You must create a complete GitHub Actions CI pipeline in \`.github/workflows/build-main-apk.yml\` to build the React Native / Expo application and generate a test-key signed production/debug APK.
-      - Make sure the workflow builds and exports the APK as a Release Asset in a new GitHub release tag (e.g. upload to a release) so the user can easily install/download it.
-      - Generate all necessary code scaffolding from scratch. Ensure clean directory structure.`;
+      - You have complete freedom to choose the best framework, language, or toolchain (such as Kotlin/Jetpack Compose, Flutter, React Native, etc.) to build this Android application.
+      - Regardless of the framework you choose, you must create a complete GitHub Actions CI pipeline in \`.github/workflows/build-main-apk.yml\` to compile and package the app into a fully signed standalone Release APK.
+      - Make sure the CI workflow builds and uploads this final APK as a Release Asset in a new GitHub release tag (e.g. upload to a release) so the user can easily install/download it.
+      - Generate all necessary code scaffolding and project structure from scratch. Ensure a clean directory structure.`;
 
       logger.info('Calling julesService.createSession()...');
       const newSession = await julesService.createSession({
