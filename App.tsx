@@ -7,6 +7,7 @@ import { ChatScreen } from './src/screens/ChatScreen';
 import { BuildStatusScreen } from './src/screens/BuildStatusScreen';
 import { GitHubService, GitHubRepo } from './src/services/github';
 import { JulesService } from './src/services/jules';
+import { ConsoleOverlay } from './src/components/ConsoleOverlay';
 
 type Screen = 'LOGIN' | 'API_KEY' | 'DASHBOARD' | 'CHAT' | 'BUILD_STATUS';
 
@@ -62,6 +63,7 @@ export default function App() {
         return (
           <DashboardScreen
             githubService={githubService}
+            julesService={julesService}
             onSelectRepo={handleSelectRepo}
             onLogout={handleLogout}
           />
@@ -104,7 +106,10 @@ export default function App() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="light-content" backgroundColor="#121214" />
-      <View style={styles.container}>{renderScreen()}</View>
+      <View style={styles.container}>
+        {renderScreen()}
+        <ConsoleOverlay />
+      </View>
     </SafeAreaView>
   );
 }

@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { JulesService, JulesSession, JulesActivity } from '../services/jules';
 import { GitHubRepo } from '../services/github';
+import { logger } from '../services/logger';
 
 interface ChatScreenProps {
   julesService: JulesService;
@@ -67,6 +68,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       return;
     }
 
+    logger.info(`Starting session for repo: ${selectedRepo.owner.login}/${selectedRepo.name}`);
     setLoading(true);
     try {
       // Append core CI generation prompt instructions autonomously!
@@ -77,6 +79,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       - Make sure the workflow builds and exports the APK as a Release Asset in a new GitHub release tag (e.g. upload to a release) so the user can easily install/download it.
       - Generate all necessary code scaffolding from scratch. Ensure clean directory structure.`;
 
+      logger.info('Calling julesService.createSession()...');
       const newSession = await julesService.createSession({
         prompt: augmentedPrompt,
         repoOwner: selectedRepo.owner.login,
@@ -85,11 +88,23 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
         requirePlanApproval: true,
       });
 
+      logger.info(`Session created successfully. ID: ${newSession.id}. State: ${newSession.state}`);
       setSession(newSession);
       onSessionStarted(newSession.id);
+      logger.info('Fetching initial activities...');
       await fetchSessionState(newSession.id);
     } catch (e: any) {
-      Alert.alert('Failed to Start Jules Session', e.message);
+      logger.error(`Failed to start Jules session: ${e.message}`);
+
+      if (e.message.includes('404')) {
+        Alert.alert(
+          '🔌 Repository Not Connected',
+          `Jules returned a 404 error ("Requested entity was not found") for this repository. \n\nThis means Jules does not have permission to access your repository yet.\n\nPlease go to jules.google.com/settings/api and connect "${selectedRepo.owner.login}/${selectedRepo.name}" as a source repository before starting.`,
+          [{ text: 'OK' }]
+        );
+      } else {
+        Alert.alert('Failed to Start Jules Session', e.message);
+      }
     } finally {
       setLoading(false);
     }

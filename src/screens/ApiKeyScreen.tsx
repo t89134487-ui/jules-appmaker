@@ -53,7 +53,7 @@ export const ApiKeyScreen: React.FC<ApiKeyScreenProps> = ({ onSuccess, onBack })
             autoCorrect={false}
           />
           <Text style={styles.hint}>
-            Your key remains local in your session space. You can obtain your API key from jules.google.com/settings.
+            Your key remains local in your session space. You can obtain your API key from jules.google.com/settings/api.
           </Text>
 
           <TouchableOpacity style={styles.button} onPress={handleSave}>

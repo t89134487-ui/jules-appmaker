@@ -34,14 +34,20 @@ export interface GitHubRelease {
   assets: GitHubReleaseAsset[];
 }
 
+import { logger } from './logger';
+
 export class GitHubService {
   private token: string;
 
   constructor(token: string) {
     this.token = token;
+    logger.info('GitHubService initialized with token');
   }
 
   private async fetchWithAuth(url: string, options: RequestInit = {}): Promise<any> {
+    const method = options.method || 'GET';
+    logger.info(`GitHub Request: ${method} ${url}`);
+
     const headers = {
       Authorization: `Bearer ${this.token}`,
       Accept: 'application/vnd.github+json',
@@ -50,14 +56,21 @@ export class GitHubService {
       ...options.headers,
     };
 
-    const res = await fetch(url, { ...options, headers });
-    if (!res.ok) {
-      const errorText = await res.text();
-      throw new Error(`GitHub API Error: ${res.status} ${res.statusText} - ${errorText}`);
-    }
+    try {
+      const res = await fetch(url, { ...options, headers });
+      if (!res.ok) {
+        const errorText = await res.text();
+        logger.error(`GitHub API Error: ${res.status} ${res.statusText} - ${errorText}`);
+        throw new Error(`GitHub API Error: ${res.status} ${res.statusText} - ${errorText}`);
+      }
 
-    if (res.status === 204) return null;
-    return res.json();
+      logger.info(`GitHub Response: ${res.status} ${res.statusText}`);
+      if (res.status === 204) return null;
+      return res.json();
+    } catch (e: any) {
+      logger.error(`GitHub Fetch Failure: ${e.message}`);
+      throw e;
+    }
   }
 
   /**

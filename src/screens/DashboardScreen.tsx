@@ -12,19 +12,24 @@ import {
 } from 'react-native';
 import * as ClipboardExpo from 'expo-clipboard';
 import { GitHubRepo, GitHubService } from '../services/github';
+import { JulesService, JulesSource } from '../services/jules';
+import { logger } from '../services/logger';
 
 interface DashboardScreenProps {
   githubService: GitHubService;
+  julesService: JulesService | null;
   onSelectRepo: (repo: GitHubRepo) => void;
   onLogout: () => void;
 }
 
 export const DashboardScreen: React.FC<DashboardScreenProps> = ({
   githubService,
+  julesService,
   onSelectRepo,
   onLogout,
 }) => {
   const [repos, setRepos] = useState<GitHubRepo[]>([]);
+  const [connectedSources, setConnectedSources] = useState<JulesSource[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [creating, setCreating] = useState(false);
@@ -39,10 +44,19 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
   const fetchRepos = async () => {
     setLoading(true);
     try {
+      logger.info('Fetching GitHub repositories...');
       const data = await githubService.getRepositories();
       setRepos(data);
+
+      if (julesService) {
+        logger.info('Fetching Jules connected sources...');
+        const sources = await julesService.getSources();
+        setConnectedSources(sources);
+        logger.info(`Found ${sources.length} connected Jules sources.`);
+      }
     } catch (e: any) {
-      Alert.alert('Error Fetching Repos', e.message);
+      logger.error(`Error fetching resources: ${e.message}`);
+      Alert.alert('Error Fetching Data', e.message);
     } finally {
       setLoading(false);
     }
@@ -81,6 +95,30 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
   const copyToClipboard = async (text: string) => {
     await ClipboardExpo.setStringAsync(text);
     Alert.alert('Copied!', 'Text copied to clipboard.');
+  };
+
+  // Helper to check if repository is connected as a Jules source
+  const isRepoConnectedToJules = (repo: GitHubRepo): boolean => {
+    // Jules source id format is usually: github-owner-repo
+    const targetSourceId = `github-${repo.owner.login}-${repo.name}`.toLowerCase();
+    return connectedSources.some((src) => {
+      const srcId = src.id.toLowerCase();
+      return (
+        srcId === targetSourceId ||
+        (src.githubRepo?.owner.toLowerCase() === repo.owner.login.toLowerCase() &&
+          src.githubRepo?.repo.toLowerCase() === repo.name.toLowerCase())
+      );
+    });
+  };
+
+  const handleSelectRepository = (repo: GitHubRepo) => {
+    if (!isRepoConnectedToJules(repo)) {
+      // If repository isn't linked to Jules, show instructions modal first to avoid 404
+      setJustCreatedRepo(repo);
+      setGuideModalVisible(true);
+    } else {
+      onSelectRepo(repo);
+    }
   };
 
   const filteredRepos = repos.filter((r) =>
@@ -126,20 +164,25 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
           data={filteredRepos}
           keyExtractor={(item) => item.id.toString()}
           contentContainerStyle={styles.list}
-          renderItem={({ item }) => (
-            <TouchableOpacity style={styles.repoCard} onPress={() => onSelectRepo(item)}>
-              <View style={styles.repoHeader}>
-                <Text style={styles.repoName}>{item.name}</Text>
-                <Text style={styles.repoPrivacy}>{item.html_url.includes('private') ? '🔒 Private' : '🌐 Public'}</Text>
-              </View>
-              {item.description ? (
-                <Text style={styles.repoDesc} numberOfLines={2}>
-                  {item.description}
-                </Text>
-              ) : null}
-              <Text style={styles.repoBranch}>Branch: {item.default_branch}</Text>
-            </TouchableOpacity>
-          )}
+          renderItem={({ item }) => {
+            const isConnected = isRepoConnectedToJules(item);
+            return (
+              <TouchableOpacity style={styles.repoCard} onPress={() => handleSelectRepository(item)}>
+                <View style={styles.repoHeader}>
+                  <Text style={styles.repoName}>{item.name}</Text>
+                  <Text style={[styles.connectionBadge, isConnected ? styles.connectedText : styles.disconnectedText]}>
+                    {isConnected ? '🔌 Connected' : '⚠️ Unlinked'}
+                  </Text>
+                </View>
+                {item.description ? (
+                  <Text style={styles.repoDesc} numberOfLines={2}>
+                    {item.description}
+                  </Text>
+                ) : null}
+                <Text style={styles.repoBranch}>Branch: {item.default_branch}</Text>
+              </TouchableOpacity>
+            );
+          }}
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
               <Text style={styles.emptyText}>No repositories found.</Text>
@@ -356,6 +399,21 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#6200ee',
     fontWeight: 'bold',
+  },
+  connectionBadge: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    paddingVertical: 2,
+    paddingHorizontal: 8,
+    borderRadius: 4,
+  },
+  connectedText: {
+    color: '#10b981',
+    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+  },
+  disconnectedText: {
+    color: '#f59e0b',
+    backgroundColor: 'rgba(245, 158, 11, 0.1)',
   },
   center: {
     flex: 1,

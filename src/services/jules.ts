@@ -79,36 +79,55 @@ export interface JulesActivity {
   }>;
 }
 
+import { logger } from './logger';
+
 export class JulesService {
   private apiKey: string;
   private baseUrl = 'https://jules.googleapis.com/v1alpha';
 
   constructor(apiKey: string) {
     this.apiKey = apiKey;
+    logger.info('JulesService initialized with API key');
   }
 
   private async fetchWithAuth(url: string, options: RequestInit = {}): Promise<any> {
+    const method = options.method || 'GET';
+    logger.info(`Jules Request: ${method} ${url}`);
+    if (options.body) {
+      logger.info(`Jules Request Body: ${options.body}`);
+    }
+
     const headers = {
       'x-goog-api-key': this.apiKey,
       'Content-Type': 'application/json',
       ...options.headers,
     };
 
-    const res = await fetch(url, { ...options, headers });
-    if (!res.ok) {
-      const errorText = await res.text();
-      let parsedErr: any;
-      try {
-        parsedErr = JSON.parse(errorText);
-      } catch {
-        parsedErr = null;
+    try {
+      const res = await fetch(url, { ...options, headers });
+      if (!res.ok) {
+        const errorText = await res.text();
+        logger.error(`Jules API raw error response: ${errorText}`);
+        let parsedErr: any;
+        try {
+          parsedErr = JSON.parse(errorText);
+        } catch {
+          parsedErr = null;
+        }
+        const msg = parsedErr?.error?.message || res.statusText || errorText;
+        logger.error(`Jules API Error parsed: ${res.status} - ${msg}`);
+        throw new Error(`Jules API Error: ${res.status} - ${msg}`);
       }
-      const msg = parsedErr?.error?.message || res.statusText || errorText;
-      throw new Error(`Jules API Error: ${res.status} - ${msg}`);
-    }
 
-    if (res.status === 204) return null;
-    return res.json();
+      logger.info(`Jules Response code: ${res.status}`);
+      if (res.status === 204) return null;
+      const data = await res.json();
+      logger.info(`Jules Response payload success: ${JSON.stringify(data).substring(0, 300)}...`);
+      return data;
+    } catch (e: any) {
+      logger.error(`Jules Fetch Failure: ${e.message}`);
+      throw e;
+    }
   }
 
   /**
