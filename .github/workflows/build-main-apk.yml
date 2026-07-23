@@ -1,0 +1,76 @@
+name: Build Android APK Release
+
+on:
+  push:
+    branches:
+      - main
+      - jules-*
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Setup Java JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Expo Prebuild
+        run: npx expo prebuild --platform android --no-install
+
+      - name: Build Android App (Assemble Debug APK)
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Locate APK
+        id: locate-apk
+        run: |
+          APK_PATH=$(find android/app/build/outputs/apk/debug/ -name "*.apk" | head -n 1)
+          if [ -z "$APK_PATH" ]; then
+            echo "Error: APK not found."
+            exit 1
+          fi
+          echo "APK path found: $APK_PATH"
+          echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
+
+      - name: Get Short Commit SHA
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v1.0.0-${{ steps.vars.outputs.sha_short }}"
+          name: "Release v1.0.0-${{ steps.vars.outputs.sha_short }}"
+          body: |
+            This release contains the latest compiled APK for the Jules Android App Maker.
+
+            Commit: ${{ github.sha }}
+          draft: false
+          prerelease: false
+          files: |
+            ${{ steps.locate-apk.outputs.apk_path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
