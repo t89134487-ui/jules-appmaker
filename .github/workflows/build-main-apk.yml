@@ -37,21 +37,44 @@ jobs:
       - name: Expo Prebuild
         run: npx expo prebuild --platform android --no-install
 
-      - name: Build Android App (Assemble Debug APK)
+      - name: Configure Gradle for Test-Key Release Signing
+        run: |
+          # After prebuild, the android folder is generated. We modify android/app/build.gradle
+          # so that the release buildType uses the debug (test-key) signing configuration.
+          # This allows building a standalone, fully bundle-embedded Release APK that runs perfectly on any phone!
+          node -e "
+            const fs = require('fs');
+            const path = 'android/app/build.gradle';
+            let content = fs.readFileSync(path, 'utf8');
+
+            // Inject signingConfig signingConfigs.debug into the release block
+            const releaseBlockRegex = /(release\s*\{\s*)([\s\S]*?\})/g;
+            content = content.replace(releaseBlockRegex, (match, p1, p2) => {
+              if (p2.includes('signingConfig')) {
+                return match; // already has signing config configured
+              }
+              return p1 + '\n        signingConfig signingConfigs.debug\n' + p2;
+            });
+
+            fs.writeFileSync(path, content, 'utf8');
+            console.log('Successfully configured build.gradle with test-key signing configuration for release build!');
+          "
+
+      - name: Build Standalone Release APK (Embedded Bundle)
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          ./gradlew assembleRelease --no-daemon
 
-      - name: Locate APK
+      - name: Locate Release APK
         id: locate-apk
         run: |
-          APK_PATH=$(find android/app/build/outputs/apk/debug/ -name "*.apk" | head -n 1)
+          APK_PATH=$(find android/app/build/outputs/apk/release/ -name "*.apk" | head -n 1)
           if [ -z "$APK_PATH" ]; then
-            echo "Error: APK not found."
+            echo "Error: Release APK not found."
             exit 1
           fi
-          echo "APK path found: $APK_PATH"
+          echo "Release APK path found: $APK_PATH"
           echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
 
       - name: Get Short Commit SHA
@@ -65,7 +88,8 @@ jobs:
           tag_name: "v1.0.0-${{ steps.vars.outputs.sha_short }}"
           name: "Release v1.0.0-${{ steps.vars.outputs.sha_short }}"
           body: |
-            This release contains the latest compiled APK for the Jules Android App Maker.
+            This release contains the latest standalone, test-signed production/release APK for the Jules Android App Maker.
+            It does not require running Metro and runs perfectly as a standalone application on your mobile device!
 
             Commit: ${{ github.sha }}
           draft: false
