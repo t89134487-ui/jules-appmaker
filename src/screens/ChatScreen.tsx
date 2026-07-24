@@ -21,6 +21,7 @@ interface ChatScreenProps {
   selectedRepo: GitHubRepo;
   initialSessionId?: string | null;
   onSessionStarted: (sessionId: string) => void;
+  onSessionStateFetched?: (state: string) => void;
   onBack: () => void;
 }
 
@@ -29,6 +30,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   selectedRepo,
   initialSessionId,
   onSessionStarted,
+  onSessionStateFetched,
   onBack,
 }) => {
   const [session, setSession] = useState<JulesSession | null>(null);
@@ -46,6 +48,9 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     try {
       const sess = await julesService.getSession(id);
       setSession(sess);
+      if (onSessionStateFetched) {
+        onSessionStateFetched(sess.state);
+      }
 
       const acts = await julesService.getActivities(id);
       setActivities(acts);

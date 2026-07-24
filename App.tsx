@@ -105,6 +105,9 @@ export default function App() {
     setCurrentScreen('LOGIN');
   };
 
+  // Keep track of active session state to know if builds have started
+  const [activeSessionState, setActiveSessionState] = useState<string | null>(null);
+
   const renderScreen = () => {
     switch (currentScreen) {
       case 'LOGIN':
@@ -128,6 +131,11 @@ export default function App() {
         );
       case 'CHAT':
         if (!julesService || !selectedRepo) return null;
+
+        // Only render the floating build progress trigger when the session has advanced
+        // past planning stages (state is strictly IN_PROGRESS or COMPLETED)
+        const isBuildActive = activeSessionState === 'IN_PROGRESS' || activeSessionState === 'COMPLETED';
+
         return (
           <View style={styles.flex}>
             <ChatScreen
@@ -135,9 +143,10 @@ export default function App() {
               selectedRepo={selectedRepo}
               initialSessionId={activeSessionId}
               onSessionStarted={(id) => setActiveSessionId(id)}
+              onSessionStateFetched={(state) => setActiveSessionState(state)}
               onBack={() => setCurrentScreen('DASHBOARD')}
             />
-            {activeSessionId && (
+            {activeSessionId && isBuildActive && (
               <TouchableOpacity
                 style={styles.floatingBuildBtn}
                 onPress={() => setCurrentScreen('BUILD_STATUS')}

@@ -200,7 +200,7 @@ export class JulesService {
           },
         },
         requirePlanApproval: options.requirePlanApproval ?? true,
-        automationMode: 'AUTO_CREATE_PR',
+        automationMode: 'AUTO_MERGE', // Changed to AUTO_MERGE so Jules merges code directly into the default branch (e.g. main)
       }),
     });
   }
