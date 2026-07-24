@@ -187,6 +187,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#121214',
     paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0,
+    paddingBottom: Platform.OS === 'android' ? 16 : 0, // Clears the Android flick-to-home gesture navigation bar
   },
   container: {
     flex: 1,

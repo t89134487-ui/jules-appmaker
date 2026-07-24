@@ -683,6 +683,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderColor: '#1e1e24',
     padding: 12,
+    paddingBottom: Platform.OS === 'android' ? 18 : 12, // Extra breathing room for gesture navigation
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#121214',
