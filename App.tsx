@@ -132,10 +132,6 @@ export default function App() {
       case 'CHAT':
         if (!julesService || !selectedRepo) return null;
 
-        // Only render the floating build progress trigger when the session has advanced
-        // past planning stages (state is strictly IN_PROGRESS or COMPLETED)
-        const isBuildActive = activeSessionState === 'IN_PROGRESS' || activeSessionState === 'COMPLETED';
-
         return (
           <View style={styles.flex}>
             <ChatScreen
@@ -144,16 +140,9 @@ export default function App() {
               initialSessionId={activeSessionId}
               onSessionStarted={(id) => setActiveSessionId(id)}
               onSessionStateFetched={(state) => setActiveSessionState(state)}
+              onViewBuildProgress={() => setCurrentScreen('BUILD_STATUS')}
               onBack={() => setCurrentScreen('DASHBOARD')}
             />
-            {activeSessionId && isBuildActive && (
-              <TouchableOpacity
-                style={styles.floatingBuildBtn}
-                onPress={() => setCurrentScreen('BUILD_STATUS')}
-              >
-                <Text style={styles.floatingBuildText}>🚀 View APK Build Progress</Text>
-              </TouchableOpacity>
-            )}
           </View>
         );
       case 'BUILD_STATUS':
@@ -216,17 +205,5 @@ const styles = StyleSheet.create({
   },
   flex: {
     flex: 1,
-  },
-  floatingBuildBtn: {
-    backgroundColor: '#10b981',
-    paddingVertical: 14,
-    alignItems: 'center',
-    borderTopWidth: 1,
-    borderColor: '#059669',
-  },
-  floatingBuildText: {
-    color: '#fff',
-    fontWeight: 'bold',
-    fontSize: 15,
   },
 });

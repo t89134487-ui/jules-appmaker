@@ -22,6 +22,7 @@ interface ChatScreenProps {
   initialSessionId?: string | null;
   onSessionStarted: (sessionId: string) => void;
   onSessionStateFetched?: (state: string) => void;
+  onViewBuildProgress?: () => void;
   onBack: () => void;
 }
 
@@ -31,6 +32,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   initialSessionId,
   onSessionStarted,
   onSessionStateFetched,
+  onViewBuildProgress,
   onBack,
 }) => {
   const [session, setSession] = useState<JulesSession | null>(null);
@@ -244,7 +246,12 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       return (
         <View key={act.id} style={styles.completedCard}>
           <Text style={styles.completedTitle}>🏆 Task Complete!</Text>
-          <Text style={styles.completedDesc}>Jules has successfully generated the code and push committed it to your repo.</Text>
+          <Text style={styles.completedDesc}>Jules has successfully generated the code and merged it directly into your branch.</Text>
+          {onViewBuildProgress && (
+            <TouchableOpacity style={styles.chatBuildBtn} onPress={onViewBuildProgress}>
+              <Text style={styles.chatBuildBtnText}>🚀 View APK Build Progress</Text>
+            </TouchableOpacity>
+          )}
         </View>
       );
     }
@@ -639,6 +646,20 @@ const styles = StyleSheet.create({
   completedDesc: {
     color: '#a0a0ab',
     fontSize: 12,
+    marginBottom: 12,
+  },
+  chatBuildBtn: {
+    backgroundColor: '#10b981',
+    borderRadius: 8,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 6,
+  },
+  chatBuildBtnText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 13,
   },
   failedCard: {
     backgroundColor: 'rgba(239, 68, 68, 0.1)',
