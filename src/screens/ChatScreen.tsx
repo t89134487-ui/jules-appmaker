@@ -197,9 +197,18 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
             <TouchableOpacity style={styles.approveBtn} onPress={handleApprovePlan} disabled={submitting}>
               {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.approveBtnText}>Approve Plan & Run Build</Text>}
             </TouchableOpacity>
+          ) : session?.state === 'QUEUED' || session?.state === 'PLANNING' ? (
+            <View style={styles.planningBadge}>
+              <ActivityIndicator color="#f59e0b" size="small" style={{ marginRight: 8 }} />
+              <Text style={styles.planningBadgeText}>Analyzing code & generating plan...</Text>
+            </View>
+          ) : session?.state === 'FAILED' ? (
+            <View style={[styles.approvedBadge, { borderColor: '#ef4444' }]}>
+              <Text style={[styles.approvedBadgeText, { color: '#ef4444' }]}>❌ Plan Failed</Text>
+            </View>
           ) : (
             <View style={styles.approvedBadge}>
-              <Text style={styles.approvedBadgeText}>✓ Plan Approved</Text>
+              <Text style={styles.approvedBadgeText}>✓ Plan Approved (Running Build)</Text>
             </View>
           )}
         </View>
@@ -540,9 +549,26 @@ const styles = StyleSheet.create({
     marginTop: 16,
     borderWidth: 1,
     borderColor: '#10b981',
+    flexDirection: 'row',
+    justifyContent: 'center',
   },
   approvedBadgeText: {
     color: '#10b981',
+    fontWeight: 'bold',
+  },
+  planningBadge: {
+    backgroundColor: 'rgba(245, 158, 11, 0.1)',
+    borderRadius: 8,
+    paddingVertical: 10,
+    alignItems: 'center',
+    marginTop: 16,
+    borderWidth: 1,
+    borderColor: '#f59e0b',
+    flexDirection: 'row',
+    justifyContent: 'center',
+  },
+  planningBadgeText: {
+    color: '#f59e0b',
     fontWeight: 'bold',
   },
   progressCard: {
