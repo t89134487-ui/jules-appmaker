@@ -49,10 +49,10 @@ export const BuildStatusScreen: React.FC<BuildStatusScreenProps> = ({
   useEffect(() => {
     fetchStatus();
 
-    // Poll status every 8 seconds
+    // Poll status every 25 seconds (optimized to prevent API spamming)
     const interval = setInterval(() => {
       fetchStatus();
-    }, 8000);
+    }, 25000);
 
     return () => clearInterval(interval);
   }, []);
@@ -88,7 +88,9 @@ export const BuildStatusScreen: React.FC<BuildStatusScreenProps> = ({
           <Text style={styles.backText}>← Workspace</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Build CI Pipeline</Text>
-        <View style={{ width: 40 }} />
+        <TouchableOpacity style={styles.refreshHeaderBtn} onPress={fetchStatus}>
+          <Text style={styles.refreshHeaderText}>🔄 Refresh</Text>
+        </TouchableOpacity>
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll}>
@@ -176,6 +178,21 @@ const styles = StyleSheet.create({
   headerTitle: {
     color: '#fff',
     fontSize: 18,
+    fontWeight: 'bold',
+    flex: 1,
+    textAlign: 'center',
+  },
+  refreshHeaderBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    backgroundColor: '#1c1c1f',
+    borderWidth: 1,
+    borderColor: '#2e2e33',
+    borderRadius: 6,
+  },
+  refreshHeaderText: {
+    color: '#3b82f6',
+    fontSize: 12,
     fontWeight: 'bold',
   },
   scroll: {

@@ -22,6 +22,8 @@ interface DashboardScreenProps {
   onLogout: () => void;
 }
 
+import { ConsoleOverlay } from '../components/ConsoleOverlay';
+
 export const DashboardScreen: React.FC<DashboardScreenProps> = ({
   githubService,
   julesService,
@@ -33,6 +35,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [creating, setCreating] = useState(false);
+  const [logsVisible, setLogsVisible] = useState(false);
 
   // New repo fields
   const [newRepoName, setNewRepoName] = useState('');
@@ -159,13 +162,18 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <View>
+        <View style={{ flex: 1, marginRight: 8 }}>
           <Text style={styles.title}>Your Projects</Text>
           <Text style={styles.subtitle}>Select or create a GitHub repo for Jules</Text>
         </View>
-        <TouchableOpacity style={styles.logoutBtn} onPress={onLogout}>
-          <Text style={styles.logoutText}>Logout</Text>
-        </TouchableOpacity>
+        <View style={styles.headerBtns}>
+          <TouchableOpacity style={styles.logsBtn} onPress={() => setLogsVisible(true)}>
+            <Text style={styles.logsBtnText}>🪲 Logs</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.logoutBtn} onPress={onLogout}>
+            <Text style={styles.logoutText}>Logout</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Actions & Search */}
@@ -358,6 +366,9 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
         </View>
       </Modal>
 
+      {/* MODAL: Debug Console logs overlay */}
+      <ConsoleOverlay visible={logsVisible} onClose={() => setLogsVisible(false)} />
+
       {/* MODAL: Guide Instruction for Jules connection */}
       <Modal
         visible={guideModalVisible}
@@ -448,6 +459,24 @@ const styles = StyleSheet.create({
     color: '#a0a0ab',
     marginTop: 4,
   },
+  headerBtns: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  logsBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    backgroundColor: '#1e1e24',
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: '#3a3a40',
+  },
+  logsBtnText: {
+    color: '#3b82f6',
+    fontSize: 13,
+    fontWeight: 'bold',
+  },
   logoutBtn: {
     paddingVertical: 6,
     paddingHorizontal: 12,
@@ -456,7 +485,7 @@ const styles = StyleSheet.create({
   },
   logoutText: {
     color: '#ef4444',
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: 'bold',
   },
   actionRow: {

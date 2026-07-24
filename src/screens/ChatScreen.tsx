@@ -72,12 +72,12 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     }
   }, [initialSessionId]);
 
-  // Poll active sessions
+  // Poll active sessions (optimized to 15 seconds to prevent API spamming)
   useEffect(() => {
     if (!session) return;
     const interval = setInterval(() => {
       fetchSessionState(session.id);
-    }, 4500);
+    }, 15000);
 
     return () => clearInterval(interval);
   }, [session?.id]);
@@ -313,7 +313,9 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
             <Text style={styles.statusLabel}>{session.state}</Text>
           </View>
         </View>
-        <View style={{ width: 40 }} />
+        <TouchableOpacity style={styles.refreshHeaderBtn} onPress={() => fetchSessionState(session.id)}>
+          <Text style={styles.refreshHeaderText}>🔄 Refresh</Text>
+        </TouchableOpacity>
       </View>
 
       {/* Chat Area */}
@@ -394,6 +396,20 @@ const styles = StyleSheet.create({
   },
   headerMeta: {
     alignItems: 'center',
+    flex: 1,
+  },
+  refreshHeaderBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    backgroundColor: '#1c1c1f',
+    borderWidth: 1,
+    borderColor: '#2e2e33',
+    borderRadius: 6,
+  },
+  refreshHeaderText: {
+    color: '#3b82f6',
+    fontSize: 12,
+    fontWeight: 'bold',
   },
   statusRow: {
     flexDirection: 'row',

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, View, SafeAreaView, StatusBar, Text, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { StyleSheet, View, SafeAreaView, StatusBar, Text, TouchableOpacity, ActivityIndicator, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LoginScreen } from './src/screens/LoginScreen';
 import { ApiKeyScreen } from './src/screens/ApiKeyScreen';
@@ -8,7 +8,6 @@ import { ChatScreen } from './src/screens/ChatScreen';
 import { BuildStatusScreen } from './src/screens/BuildStatusScreen';
 import { GitHubService, GitHubRepo } from './src/services/github';
 import { JulesService } from './src/services/jules';
-import { ConsoleOverlay } from './src/components/ConsoleOverlay';
 import { logger } from './src/services/logger';
 
 type Screen = 'LOGIN' | 'API_KEY' | 'DASHBOARD' | 'CHAT' | 'BUILD_STATUS';
@@ -180,7 +179,6 @@ export default function App() {
       <StatusBar barStyle="light-content" backgroundColor="#121214" />
       <View style={styles.container}>
         {renderScreen()}
-        <ConsoleOverlay />
       </View>
     </SafeAreaView>
   );
@@ -190,6 +188,7 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: '#121214',
+    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0,
   },
   container: {
     flex: 1,
