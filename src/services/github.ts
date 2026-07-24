@@ -145,4 +145,19 @@ export class GitHubService {
     }
     return null;
   }
+
+  /**
+   * Merges a Pull Request directly via the GitHub API using the user's token.
+   */
+  async mergePullRequest(owner: string, repo: string, prNumber: number): Promise<{ merged: boolean; message: string }> {
+    logger.info(`GitHub: Attempting to automatically merge PR #${prNumber} on ${owner}/${repo}...`);
+    return this.fetchWithAuth(`https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/merge`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        commit_title: `Auto-merge Jules generated app code (PR #${prNumber})`,
+        commit_message: 'Merged automatically by Jules App Maker on mobile.',
+        merge_method: 'merge', // 'merge', 'squash', or 'rebase'
+      }),
+    });
+  }
 }

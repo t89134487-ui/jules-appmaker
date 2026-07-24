@@ -16,8 +16,11 @@ import { JulesService, JulesSession, JulesActivity } from '../services/jules';
 import { GitHubRepo } from '../services/github';
 import { logger } from '../services/logger';
 
+import { GitHubService } from '../services/github';
+
 interface ChatScreenProps {
   julesService: JulesService;
+  gitHubService?: GitHubService | null; // Pass GitHub service for dynamic merge execution
   selectedRepo: GitHubRepo;
   initialSessionId?: string | null;
   onSessionStarted: (sessionId: string) => void;
@@ -28,6 +31,7 @@ interface ChatScreenProps {
 
 export const ChatScreen: React.FC<ChatScreenProps> = ({
   julesService,
+  gitHubService,
   selectedRepo,
   initialSessionId,
   onSessionStarted,
@@ -40,6 +44,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [mergedPrs, setMergedPrs] = useState<Record<number, boolean>>({});
 
   // Initial prompt state
   const [initialPrompt, setInitialPrompt] = useState('');
@@ -56,6 +61,40 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
 
       const acts = await julesService.getActivities(id);
       setActivities(acts);
+
+      // Perform auto-merge if Jules has completed the task and left a pull request URL
+      if (sess.state === 'COMPLETED' && gitHubService) {
+        // Read pull request outputs
+        const outputs = (sess as any).outputs || [];
+        for (const output of outputs) {
+          if (output.pullRequest && output.pullRequest.url) {
+            const prUrl = output.pullRequest.url;
+            // Parse pull request number from url e.g. "https://github.com/owner/repo/pull/12"
+            const match = prUrl.match(/\/pull\/(\d+)/);
+            if (match && match[1]) {
+              const prNumber = parseInt(match[1], 10);
+
+              // Only trigger merge once per PR to avoid spamming the PUT call
+              if (!mergedPrs[prNumber]) {
+                logger.info(`Detected completed session PR #${prNumber}. Triggering auto-merge...`);
+                // Mark as merged in local state immediately to avoid concurrent runs
+                setMergedPrs((prev) => ({ ...prev, [prNumber]: true }));
+
+                try {
+                  const mergeResult = await gitHubService.mergePullRequest(
+                    selectedRepo.owner.login,
+                    selectedRepo.name,
+                    prNumber
+                  );
+                  logger.info(`PR #${prNumber} merged successfully: ${JSON.stringify(mergeResult)}`);
+                } catch (mergeErr: any) {
+                  logger.error(`PR #${prNumber} merge failed: ${mergeErr.message}`);
+                }
+              }
+            }
+          }
+        }
+      }
     } catch (e: any) {
       console.warn('Failed to poll session state', e);
     }
@@ -106,7 +145,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       - You have complete freedom to choose the best framework, language, or toolchain (such as Kotlin/Jetpack Compose, Flutter, React Native, etc.) to build this Android application.
       - Regardless of the framework you choose, you must create a complete GitHub Actions CI pipeline in \`.github/workflows/build-main-apk.yml\` to compile and package the app into a fully signed standalone Release APK.
       - Make sure the CI workflow builds and uploads this final APK as a Release Asset in a new GitHub release tag (e.g. upload to a release) so the user can easily install/download it.
-      - Generate all necessary code scaffolding and project structure from scratch. Ensure a clean directory structure.`;
+      - Generate all necessary code scaffolding and project structure from scratch. Ensure a clean directory structure.
+      - Once you complete writing the code, please make sure to merge your changes directly into the starting default branch (e.g. '${selectedRepo.default_branch}') so they are integrated instantly without leaving open Pull Requests.`;
 
       logger.info('Calling julesService.createSession()...');
       const newSession = await julesService.createSession({

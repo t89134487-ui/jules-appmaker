@@ -136,6 +136,7 @@ export default function App() {
           <View style={styles.flex}>
             <ChatScreen
               julesService={julesService}
+              gitHubService={githubService}
               selectedRepo={selectedRepo}
               initialSessionId={activeSessionId}
               onSessionStarted={(id) => setActiveSessionId(id)}
