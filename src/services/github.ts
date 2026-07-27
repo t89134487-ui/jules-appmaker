@@ -162,16 +162,37 @@ export class GitHubService {
   }
 
   /**
+   * Creates a Pull Request on the specified repository.
+   */
+  async createPullRequest(owner: string, repo: string, title: string, head: string, base: string): Promise<any> {
+    logger.info(`GitHubService: Creating Pull Request from "${head}" into "${base}" on ${owner}/${repo}...`);
+    return this.fetchWithAuth(`https://api.github.com/repos/${owner}/${repo}/pulls`, {
+      method: 'POST',
+      body: JSON.stringify({
+        title,
+        head,
+        base,
+        body: 'Pull request generated autonomously by Jules App Maker.',
+      }),
+    });
+  }
+
+  /**
    * Merges a Pull Request directly via the GitHub API using the user's token.
    */
-  async mergePullRequest(owner: string, repo: string, prNumber: number): Promise<{ merged: boolean; message: string }> {
-    logger.info(`GitHub: Attempting to automatically merge PR #${prNumber} on ${owner}/${repo}...`);
+  async mergePullRequest(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    method: 'merge' | 'squash' | 'rebase' = 'rebase'
+  ): Promise<{ merged: boolean; message: string }> {
+    logger.info(`GitHub: Attempting to automatically merge PR #${prNumber} using method "${method}" on ${owner}/${repo}...`);
     return this.fetchWithAuth(`https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/merge`, {
       method: 'PUT',
       body: JSON.stringify({
         commit_title: `Auto-merge Jules generated app code (PR #${prNumber})`,
         commit_message: 'Merged automatically by Jules App Maker on mobile.',
-        merge_method: 'merge', // 'merge', 'squash', or 'rebase'
+        merge_method: method,
       }),
     });
   }

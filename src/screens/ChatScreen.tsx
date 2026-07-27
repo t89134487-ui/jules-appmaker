@@ -82,21 +82,41 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
             if (branchName.startsWith('jules-') && branchName !== selectedRepo.default_branch) {
               matchedAnyBranch = true;
               if (!mergedBranches[branchName]) {
-                logger.info(`ChatScreen: Detected completed session branch "${branchName}". Triggering quiet direct merge...`);
-                setMergeStatus(`Merging development branch "${branchName}"...`);
+                logger.info(`ChatScreen: Detected completed session branch "${branchName}". Triggering PR creation & rebase merge...`);
+                setMergeStatus(`Integrating development branch "${branchName}" via rebase...`);
 
                 // Immediately mark as merged locally to prevent concurrent/duplicate API requests
                 setMergedBranches((prev) => ({ ...prev, [branchName]: true }));
 
                 try {
-                  const mergeResult = await gitHubService.mergeBranch(
+                  // Fetch open PRs to see if one already exists
+                  const openPrs = await gitHubService.getOpenPullRequests(selectedRepo.owner.login, selectedRepo.name);
+                  let pr = openPrs.find((p: any) => p.head && p.head.ref === branchName);
+
+                  if (!pr) {
+                    logger.info(`ChatScreen: No open PR found for branch "${branchName}". Creating new PR...`);
+                    setMergeStatus(`Creating integration Pull Request for "${branchName}"...`);
+                    pr = await gitHubService.createPullRequest(
+                      selectedRepo.owner.login,
+                      selectedRepo.name,
+                      `Merge Jules development branch "${branchName}"`,
+                      branchName,
+                      selectedRepo.default_branch
+                    );
+                  }
+
+                  const prNumber = pr.number;
+                  logger.info(`ChatScreen: Merging PR #${prNumber} via rebase...`);
+                  setMergeStatus(`Performing fast-forward rebase merge for PR #${prNumber}...`);
+
+                  const mergeResult = await gitHubService.mergePullRequest(
                     selectedRepo.owner.login,
                     selectedRepo.name,
-                    selectedRepo.default_branch,
-                    branchName
+                    prNumber,
+                    'rebase'
                   );
-                  logger.info(`ChatScreen: Branch "${branchName}" merged successfully quietly: ${JSON.stringify(mergeResult)}`);
-                  setMergeStatus(`Branch "${branchName}" merged successfully! Cleaning up...`);
+                  logger.info(`ChatScreen: PR #${prNumber} merged successfully via rebase: ${JSON.stringify(mergeResult)}`);
+                  setMergeStatus(`Rebase merge complete! Cleaning up development branch "${branchName}"...`);
 
                   // Delete the branch quietly to clean up references
                   try {
@@ -106,14 +126,14 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                       branchName
                     );
                     logger.info(`ChatScreen: Branch "${branchName}" deleted successfully quietly.`);
-                    setMergeStatus(`Integrated development branch "${branchName}" and cleaned up references.`);
+                    setMergeStatus(`Integrated "${branchName}" successfully via rebase and cleaned up branch.`);
                   } catch (deleteErr: any) {
                     logger.warn(`ChatScreen: Quiet branch deletion failed for "${branchName}": ${deleteErr.message}`);
-                    setMergeStatus(`Integrated "${branchName}" (reference cleanup skipped).`);
+                    setMergeStatus(`Integrated "${branchName}" successfully via rebase (cleanup skipped).`);
                   }
                 } catch (mergeErr: any) {
-                  logger.error(`ChatScreen: Direct merge failed for branch "${branchName}": ${mergeErr.message}`);
-                  setMergeStatus(`Failed to merge branch: ${mergeErr.message}`);
+                  logger.error(`ChatScreen: Rebase merge failed for branch "${branchName}": ${mergeErr.message}`);
+                  setMergeStatus(`Failed to integrate branch: ${mergeErr.message}`);
                 }
               }
             }
@@ -317,22 +337,6 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       );
     }
 
-    if (act.sessionCompleted) {
-      return (
-        <View key={act.id} style={styles.completedCardInline}>
-          <Text style={styles.completedTitleInline}>🏆 Task Complete!</Text>
-          <Text style={styles.completedDescInline}>
-            {act.description || 'Jules has successfully generated the code and completed the tasks.'}
-          </Text>
-          {onViewBuildProgress && (
-            <TouchableOpacity style={styles.chatBuildBtnInline} onPress={onViewBuildProgress}>
-              <Text style={styles.chatBuildBtnTextInline}>🚀 View APK Build Progress</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      );
-    }
-
     if (act.sessionFailed) {
       return (
         <View key={act.id} style={styles.failedCard}>
@@ -439,15 +443,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
           <View style={styles.mergeStatusCard}>
             <Text style={styles.mergeStatusTitle}>⚙️ Integration Status</Text>
             <Text style={styles.mergeStatusDesc}>{mergeStatus}</Text>
-          </View>
-        )}
-
-        {session.state?.toUpperCase() === 'COMPLETED' && (
-          <View style={styles.completedCard}>
-            <Text style={styles.completedTitle}>🏆 Task Complete!</Text>
-            <Text style={styles.completedDesc}>Jules has successfully generated the code and merged it directly into your branch.</Text>
             {onViewBuildProgress && (
-              <TouchableOpacity style={styles.chatBuildBtn} onPress={onViewBuildProgress}>
+              <TouchableOpacity style={[styles.chatBuildBtn, { marginTop: 12 }]} onPress={onViewBuildProgress}>
                 <Text style={styles.chatBuildBtnText}>🚀 View APK Build Progress</Text>
               </TouchableOpacity>
             )}
