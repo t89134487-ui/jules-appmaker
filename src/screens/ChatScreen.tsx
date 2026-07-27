@@ -154,7 +154,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
         repoOwner: selectedRepo.owner.login,
         repoName: selectedRepo.name,
         branch: selectedRepo.default_branch,
-        requirePlanApproval: true,
+        requirePlanApproval: false, // Changed to false to prevent manual plan approval prompts
       });
 
       logger.info(`Session created successfully. ID: ${newSession.id}. State: ${newSession.state}`);
@@ -230,17 +230,6 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
 
     if (act.planGenerated) {
       const plan = act.planGenerated.plan;
-
-      // Determine if this plan has actually been approved yet:
-      // 1. Check if there is an explicit planApproved activity event present anywhere in the activities history list.
-      const hasPlanApprovedActivity = activities.some((a) => a.planApproved != null);
-
-      // 2. Check if the session is currently awaiting approval.
-      const isAwaitingApproval = session?.state === 'AWAITING_PLAN_APPROVAL';
-
-      // 3. Check if the session is in planning/queued stages.
-      const isPlanning = session?.state === 'QUEUED' || session?.state === 'PLANNING' || !session;
-
       return (
         <View key={act.id} style={styles.planCard}>
           <Text style={styles.planTitle}>📋 Proposed Development Plan</Text>
@@ -250,25 +239,6 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
               <Text style={styles.stepDesc}>{step.description}</Text>
             </View>
           ))}
-
-          {isAwaitingApproval && !hasPlanApprovedActivity ? (
-            <TouchableOpacity style={styles.approveBtn} onPress={handleApprovePlan} disabled={submitting}>
-              {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.approveBtnText}>Approve Plan & Run Build</Text>}
-            </TouchableOpacity>
-          ) : isPlanning && !hasPlanApprovedActivity ? (
-            <View style={styles.planningBadge}>
-              <ActivityIndicator color="#f59e0b" size="small" style={{ marginRight: 8 }} />
-              <Text style={styles.planningBadgeText}>Analyzing code & generating plan...</Text>
-            </View>
-          ) : session?.state === 'FAILED' ? (
-            <View style={[styles.approvedBadge, { borderColor: '#ef4444' }]}>
-              <Text style={[styles.approvedBadgeText, { color: '#ef4444' }]}>❌ Plan Failed</Text>
-            </View>
-          ) : (
-            <View style={styles.approvedBadge}>
-              <Text style={styles.approvedBadgeText}>✓ Plan Approved (Running Build)</Text>
-            </View>
-          )}
         </View>
       );
     }

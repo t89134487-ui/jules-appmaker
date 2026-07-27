@@ -199,7 +199,7 @@ export class JulesService {
             startingBranch: options.branch || 'main',
           },
         },
-        requirePlanApproval: options.requirePlanApproval ?? true,
+        requirePlanApproval: false, // Explicitly set to false so Jules auto-approves plans and executes them natively without any manual step!
         automationMode: 'AUTO_CREATE_PR', // Reverted back to the official supported value 'AUTO_CREATE_PR' to avoid API validation errors
       }),
     });
