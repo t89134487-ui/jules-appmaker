@@ -274,10 +274,13 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     }
 
     if (act.progressUpdated) {
+      const progressTitle = act.progressUpdated.title || 'Task in Progress';
+      const progressDesc = act.progressUpdated.description || act.description;
+
       return (
         <View key={act.id} style={styles.progressCard}>
-          <Text style={styles.progressTitle}>⚡ Progress: {act.progressUpdated.title}</Text>
-          <Text style={styles.progressDesc}>{act.progressUpdated.description}</Text>
+          <Text style={styles.progressTitle}>⚡ Progress: {progressTitle}</Text>
+          {progressDesc ? <Text style={styles.progressDesc}>{progressDesc}</Text> : null}
         </View>
       );
     }
