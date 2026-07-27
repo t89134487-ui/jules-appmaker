@@ -118,15 +118,18 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     }
   }, [initialSessionId]);
 
-  // Poll active sessions (optimized to 15 seconds to prevent API spamming)
+  // Poll active sessions (speed up to 5 seconds when running, 20 seconds when idle)
   useEffect(() => {
     if (!session) return;
+    const isActivelyRunning = session.state !== 'COMPLETED' && session.state !== 'FAILED';
+    const intervalMs = isActivelyRunning ? 5000 : 20000;
+
     const interval = setInterval(() => {
       fetchSessionState(session.id);
-    }, 15000);
+    }, intervalMs);
 
     return () => clearInterval(interval);
-  }, [session?.id]);
+  }, [session?.id, session?.state]);
 
   const handleStartSession = async () => {
     if (!initialPrompt.trim()) {
@@ -186,7 +189,17 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     setMessage('');
     try {
       await julesService.sendMessage(session.id, textToSend);
+
+      // Fetch immediately to display user message in the activities list
       await fetchSessionState(session.id);
+
+      // Schedule subsequent fetches to catch state transition on Jules server
+      setTimeout(() => {
+        if (session) fetchSessionState(session.id);
+      }, 2000);
+      setTimeout(() => {
+        if (session) fetchSessionState(session.id);
+      }, 5000);
     } catch (e: any) {
       Alert.alert('Error Sending Message', e.message);
     } finally {
@@ -304,6 +317,15 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
         <View key={act.id} style={styles.failedCard}>
           <Text style={styles.failedTitle}>❌ Session Failed</Text>
           <Text style={styles.failedDesc}>{act.sessionFailed.reason}</Text>
+        </View>
+      );
+    }
+
+    // Default fallback: if the activity has a description, render it as a status card to prevent empty progress boxes
+    if (act.description) {
+      return (
+        <View key={act.id} style={styles.statusCardFallback}>
+          <Text style={styles.statusCardTextFallback}>⚙️ {act.description}</Text>
         </View>
       );
     }
@@ -757,5 +779,19 @@ const styles = StyleSheet.create({
   sendBtnText: {
     color: '#fff',
     fontWeight: 'bold',
+  },
+  statusCardFallback: {
+    backgroundColor: '#1c1c1f',
+    borderColor: '#2e2e33',
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 12,
+    alignSelf: 'stretch',
+  },
+  statusCardTextFallback: {
+    color: '#a0a0ab',
+    fontSize: 13,
+    lineHeight: 18,
   },
 });

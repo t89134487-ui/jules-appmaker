@@ -52,11 +52,16 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
   const [threadLoading, setThreadLoading] = useState(false);
   const [targetRepoForThreads, setTargetRepoForThreads] = useState<GitHubRepo | null>(null);
 
+  // New Repository Selector fields
+  const [repoSelectorVisible, setRepoSelectorVisible] = useState(false);
+  const [repoSearchQuery, setRepoSearchQuery] = useState('');
+
   const loadCache = async () => {
     try {
-      logger.info('Checking for cached repository data...');
+      logger.info('Checking for cached data...');
       const cachedReposStr = await AsyncStorage.getItem('@cached_repos');
       const cachedSourcesStr = await AsyncStorage.getItem('@cached_connected_sources');
+      const cachedChatsStr = await AsyncStorage.getItem('@cached_chats');
 
       if (cachedReposStr) {
         const cachedRepos = JSON.parse(cachedReposStr);
@@ -67,6 +72,11 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
         const cachedSources = JSON.parse(cachedSourcesStr);
         setConnectedSources(cachedSources);
         logger.info(`Loaded ${cachedSources.length} cached sources from AsyncStorage.`);
+      }
+      if (cachedChatsStr) {
+        const cachedChats = JSON.parse(cachedChatsStr);
+        setAllSessions(cachedChats);
+        logger.info(`Loaded ${cachedChats.length} cached chats from AsyncStorage.`);
       }
     } catch (e: any) {
       logger.warn(`Failed to load repository cache: ${e.message}`);
@@ -93,6 +103,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
         logger.info('Fetching Jules active sessions/threads...');
         const sessions = await julesService.getSessions();
         setAllSessions(sessions);
+        await AsyncStorage.setItem('@cached_chats', JSON.stringify(sessions));
         logger.info(`Found ${sessions.length} sessions/threads in total.`);
       }
     } catch (e: any) {
@@ -190,8 +201,86 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
     }
   };
 
-  const filteredRepos = repos.filter((r) =>
-    r.name.toLowerCase().includes(searchQuery.toLowerCase())
+  const getRepoForSession = (sess: any): GitHubRepo | null => {
+    const sourceCtx = sess.sourceContext?.source || '';
+    const cleaned = sourceCtx.replace(/^sources\//, '');
+    if (cleaned.startsWith('github-')) {
+      const parts = cleaned.substring(7).split('-');
+      if (parts.length >= 2) {
+        const owner = parts[0].toLowerCase();
+        const repo = parts.slice(1).join('-').toLowerCase();
+
+        const match = repos.find(
+          (r) => r.owner.login.toLowerCase() === owner && r.name.toLowerCase() === repo
+        );
+        if (match) return match;
+      }
+    }
+
+    const matchFallback = repos.find((r) => {
+      const lowerSource = sourceCtx.toLowerCase();
+      return (
+        lowerSource.includes(r.name.toLowerCase()) &&
+        lowerSource.includes(r.owner.login.toLowerCase())
+      );
+    });
+    return matchFallback || null;
+  };
+
+  const getOrCreateRepoForSession = (sess: any): GitHubRepo => {
+    const matched = getRepoForSession(sess);
+    if (matched) return matched;
+
+    const sourceCtx = sess.sourceContext?.source || '';
+    const cleaned = sourceCtx.replace(/^sources\//, '');
+    let owner = 'unknown';
+    let repoName = 'unknown-repo';
+    if (cleaned.startsWith('github-')) {
+      const parts = cleaned.substring(7).split('-');
+      if (parts.length >= 2) {
+        owner = parts[0];
+        repoName = parts.slice(1).join('-');
+      }
+    }
+
+    return {
+      id: Math.random(),
+      name: repoName,
+      full_name: `${owner}/${repoName}`,
+      owner: {
+        login: owner,
+        avatar_url: '',
+      },
+      html_url: `https://github.com/${owner}/${repoName}`,
+      description: 'Repo associated with this Jules session',
+      default_branch: 'main',
+    };
+  };
+
+  const sortedSessions = [...allSessions].sort((a, b) => {
+    const timeA = new Date(a.updateTime || a.createTime).getTime();
+    const timeB = new Date(b.updateTime || b.createTime).getTime();
+    return timeB - timeA;
+  });
+
+  const filteredSessions = sortedSessions.filter((sess) => {
+    const query = searchQuery.toLowerCase();
+    const title = (sess.title || '').toLowerCase();
+    const prompt = (sess.prompt || '').toLowerCase();
+    const repo = getRepoForSession(sess);
+    const repoName = repo ? repo.name.toLowerCase() : '';
+    const repoOwner = repo ? repo.owner.login.toLowerCase() : '';
+
+    return (
+      title.includes(query) ||
+      prompt.includes(query) ||
+      repoName.includes(query) ||
+      repoOwner.includes(query)
+    );
+  });
+
+  const filteredReposForSelection = repos.filter((r) =>
+    r.name.toLowerCase().includes(repoSearchQuery.toLowerCase())
   );
 
   return (
@@ -199,8 +288,8 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
       {/* Header */}
       <View style={styles.header}>
         <View style={{ flex: 1, marginRight: 8 }}>
-          <Text style={styles.title}>Your Projects</Text>
-          <Text style={styles.subtitle}>Select or create a GitHub repo for Jules</Text>
+          <Text style={styles.title}>Jules Chats</Text>
+          <Text style={styles.subtitle}>Select a thread to resume coding or start new</Text>
         </View>
         <View style={styles.headerBtns}>
           <TouchableOpacity style={styles.logsBtn} onPress={() => setLogsVisible(true)}>
@@ -216,55 +305,156 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
       <View style={styles.actionRow}>
         <TextInput
           style={styles.searchInput}
-          placeholder="Search repositories..."
+          placeholder="Search chats..."
           placeholderTextColor="#888"
           value={searchQuery}
           onChangeText={setSearchQuery}
           autoCapitalize="none"
         />
-        <TouchableOpacity style={styles.createBtn} onPress={() => setCreateModalVisible(true)}>
-          <Text style={styles.createBtnText}>+ New Repo</Text>
+        <TouchableOpacity style={styles.createBtn} onPress={() => { setRepoSearchQuery(''); setRepoSelectorVisible(true); }}>
+          <Text style={styles.createBtnText}>💬 New Chat</Text>
         </TouchableOpacity>
       </View>
 
-      {/* List */}
-      {loading ? (
+      {/* List of Chats */}
+      {loading && allSessions.length === 0 ? (
         <View style={styles.center}>
           <ActivityIndicator size="large" color="#6200ee" />
-          <Text style={styles.loadingText}>Loading repositories...</Text>
+          <Text style={styles.loadingText}>Loading chats...</Text>
         </View>
       ) : (
         <FlatList
-          data={filteredRepos}
-          keyExtractor={(item) => item.id.toString()}
+          data={filteredSessions}
+          keyExtractor={(item) => item.id}
           contentContainerStyle={styles.list}
           renderItem={({ item }) => {
-            const isConnected = isRepoConnectedToJules(item);
+            const repo = getOrCreateRepoForSession(item);
             return (
-              <TouchableOpacity style={styles.repoCard} onPress={() => handleSelectRepository(item)}>
-                <View style={styles.repoHeader}>
-                  <Text style={styles.repoName}>{item.name}</Text>
-                  <Text style={[styles.connectionBadge, isConnected ? styles.connectedText : styles.disconnectedText]}>
-                    {isConnected ? '🔌 Connected' : '⚠️ Unlinked'}
+              <TouchableOpacity
+                style={styles.chatCardMain}
+                onPress={() => onSelectRepo(repo, item.id)}
+              >
+                <View style={styles.chatHeaderMain}>
+                  <Text style={styles.chatTitleMain} numberOfLines={1}>
+                    {item.title || `Session ${item.id}`}
                   </Text>
+                  <View style={[styles.statusBadgeMain, { backgroundColor: getStatusColor(item.state) }]}>
+                    <Text style={styles.statusBadgeTextMain}>{item.state}</Text>
+                  </View>
                 </View>
-                {item.description ? (
-                  <Text style={styles.repoDesc} numberOfLines={2}>
-                    {item.description}
-                  </Text>
-                ) : null}
-                <Text style={styles.repoBranch}>Branch: {item.default_branch}</Text>
+
+                <Text style={styles.chatRepoName}>
+                  📂 {repo.owner.login}/{repo.name}
+                </Text>
+
+                <Text style={styles.chatPromptMain} numberOfLines={2}>
+                  {item.prompt}
+                </Text>
+
+                <Text style={styles.chatMetaMain}>
+                  Last active: {new Date(item.updateTime || item.createTime).toLocaleString()}
+                </Text>
               </TouchableOpacity>
             );
           }}
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
-              <Text style={styles.emptyText}>No repositories found.</Text>
-              <Text style={styles.emptySubtext}>Try creating a new one above!</Text>
+              <Text style={styles.emptyText}>No Jules chats found.</Text>
+              <Text style={styles.emptySubtext}>Click "New Chat" above to start your first project!</Text>
             </View>
           }
         />
       )}
+
+      {/* MODAL: Select Repository for New Chat */}
+      <Modal
+        visible={repoSelectorVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setRepoSelectorVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContentLarge}>
+            <View style={styles.modalHeaderRow}>
+              <Text style={styles.modalTitle}>📂 Select Repository</Text>
+              <TouchableOpacity
+                style={styles.closeModalTextBtn}
+                onPress={() => setRepoSelectorVisible(false)}
+              >
+                <Text style={styles.closeModalText}>✕ Close</Text>
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.modalDesc}>
+              Select a GitHub repository to start a clean session with Jules.
+            </Text>
+
+            <View style={styles.modalActionRow}>
+              <TextInput
+                style={styles.modalSearchInput}
+                placeholder="Search repos..."
+                placeholderTextColor="#888"
+                value={repoSearchQuery}
+                onChangeText={setRepoSearchQuery}
+                autoCapitalize="none"
+              />
+              <TouchableOpacity
+                style={styles.modalCreateRepoBtn}
+                onPress={() => {
+                  setRepoSelectorVisible(false);
+                  setCreateModalVisible(true);
+                }}
+              >
+                <Text style={styles.modalCreateRepoText}>+ New Repo</Text>
+              </TouchableOpacity>
+            </View>
+
+            <FlatList
+              data={filteredReposForSelection}
+              keyExtractor={(item) => item.id.toString()}
+              style={{ maxHeight: 300 }}
+              renderItem={({ item }) => {
+                const isConnected = isRepoConnectedToJules(item);
+                return (
+                  <TouchableOpacity
+                    style={styles.repoSelectionCard}
+                    onPress={() => {
+                      setRepoSelectorVisible(false);
+                      if (!isConnected) {
+                        setJustCreatedRepo(item);
+                        setGuideModalVisible(true);
+                      } else {
+                        onSelectRepo(item); // Clean session
+                      }
+                    }}
+                  >
+                    <View style={styles.repoSelectionHeader}>
+                      <Text style={styles.repoSelectionName}>{item.name}</Text>
+                      <Text style={[styles.connectionBadge, isConnected ? styles.connectedText : styles.disconnectedText]}>
+                        {isConnected ? '🔌 Linked' : '⚠️ Unlinked'}
+                      </Text>
+                    </View>
+                    <Text style={styles.repoSelectionBranch}>Branch: {item.default_branch}</Text>
+                  </TouchableOpacity>
+                );
+              }}
+              ListEmptyComponent={
+                <View style={styles.emptyContainerSmall}>
+                  <Text style={styles.emptyTextSmall}>No repositories found.</Text>
+                  <TouchableOpacity
+                    onPress={() => {
+                      setRepoSelectorVisible(false);
+                      setCreateModalVisible(true);
+                    }}
+                  >
+                    <Text style={styles.createTextBtn}>Create a new one now!</Text>
+                  </TouchableOpacity>
+                </View>
+              }
+            />
+          </View>
+        </View>
+      </Modal>
 
       {/* MODAL: Create Repo */}
       <Modal
@@ -873,5 +1063,122 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: 'bold',
     fontSize: 15,
+  },
+  chatCardMain: {
+    backgroundColor: '#1c1c1f',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#2e2e33',
+  },
+  chatHeaderMain: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  chatTitleMain: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+    flex: 1,
+    marginRight: 8,
+  },
+  statusBadgeMain: {
+    paddingVertical: 2,
+    paddingHorizontal: 8,
+    borderRadius: 4,
+  },
+  statusBadgeTextMain: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: 'bold',
+  },
+  chatRepoName: {
+    color: '#6200ee',
+    fontSize: 13,
+    fontWeight: 'bold',
+    marginBottom: 8,
+  },
+  chatPromptMain: {
+    color: '#a0a0ab',
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 10,
+  },
+  chatMetaMain: {
+    color: '#52525b',
+    fontSize: 11,
+  },
+  modalActionRow: {
+    flexDirection: 'row',
+    marginBottom: 16,
+    alignItems: 'center',
+  },
+  modalSearchInput: {
+    flex: 1,
+    backgroundColor: '#121214',
+    borderWidth: 1,
+    borderColor: '#3a3a40',
+    borderRadius: 8,
+    color: '#fff',
+    height: 44,
+    paddingHorizontal: 12,
+    fontSize: 14,
+    marginRight: 8,
+  },
+  modalCreateRepoBtn: {
+    backgroundColor: '#6200ee',
+    borderRadius: 8,
+    height: 44,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalCreateRepoText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  repoSelectionCard: {
+    backgroundColor: '#121214',
+    borderWidth: 1,
+    borderColor: '#2e2e33',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 10,
+  },
+  repoSelectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  repoSelectionName: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: 'bold',
+    flex: 1,
+    marginRight: 8,
+  },
+  repoSelectionBranch: {
+    color: '#71717a',
+    fontSize: 11,
+  },
+  emptyContainerSmall: {
+    alignItems: 'center',
+    paddingVertical: 24,
+  },
+  emptyTextSmall: {
+    color: '#71717a',
+    fontSize: 13,
+  },
+  createTextBtn: {
+    color: '#6200ee',
+    fontWeight: 'bold',
+    fontSize: 13,
+    marginTop: 6,
+    textDecorationLine: 'underline',
   },
 });
