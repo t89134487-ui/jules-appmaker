@@ -131,6 +131,16 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     return () => clearInterval(interval);
   }, [session?.id, session?.state]);
 
+  // Automatically scroll to end when activities are loaded or updated
+  useEffect(() => {
+    if (activities.length > 0) {
+      const timer = setTimeout(() => {
+        scrollRef.current?.scrollToEnd({ animated: true });
+      }, 150);
+      return () => clearTimeout(timer);
+    }
+  }, [activities.length, loading]);
+
   const handleStartSession = async () => {
     if (!initialPrompt.trim()) {
       Alert.alert('Error', 'Please describe the app you want to build');
