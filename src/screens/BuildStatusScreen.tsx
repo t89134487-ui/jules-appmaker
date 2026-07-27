@@ -10,6 +10,7 @@ import {
   Alert,
   Platform,
 } from 'react-native';
+import * as ClipboardExpo from 'expo-clipboard';
 import { GitHubService, GitHubWorkflowRun, GitHubReleaseAsset } from '../services/github';
 
 interface BuildStatusScreenProps {
@@ -175,6 +176,15 @@ export const BuildStatusScreen: React.FC<BuildStatusScreenProps> = ({
               </Text>
               <TouchableOpacity style={styles.downloadBtn} onPress={handleDownload}>
                 <Text style={styles.downloadBtnText}>Install / Download APK</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.copyLinkBtn}
+                onPress={async () => {
+                  await ClipboardExpo.setStringAsync(apkAsset.browser_download_url);
+                  Alert.alert('Copied!', 'APK Download URL copied to clipboard.');
+                }}
+              >
+                <Text style={styles.copyLinkBtnText}>📋 Copy APK Download Link</Text>
               </TouchableOpacity>
               <Text style={styles.apkMeta}>{apkAsset.name}</Text>
               {currentCommitSha ? (
@@ -357,6 +367,23 @@ const styles = StyleSheet.create({
   downloadBtnText: {
     color: '#fff',
     fontSize: 16,
+    fontWeight: 'bold',
+  },
+  copyLinkBtn: {
+    borderWidth: 1,
+    borderColor: '#2e2e33',
+    backgroundColor: '#121214',
+    borderRadius: 8,
+    height: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    marginBottom: 16,
+    marginTop: 6,
+  },
+  copyLinkBtnText: {
+    color: '#fff',
+    fontSize: 14,
     fontWeight: 'bold',
   },
   apkMeta: {
