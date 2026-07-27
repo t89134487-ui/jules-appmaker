@@ -71,13 +71,6 @@ export const BuildStatusScreen: React.FC<BuildStatusScreenProps> = ({
 
   useEffect(() => {
     fetchStatus();
-
-    // Poll status every 25 seconds (optimized to prevent API spamming)
-    const interval = setInterval(() => {
-      fetchStatus();
-    }, 25000);
-
-    return () => clearInterval(interval);
   }, []);
 
   const handleDownload = async () => {

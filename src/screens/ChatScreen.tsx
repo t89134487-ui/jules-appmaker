@@ -44,7 +44,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [mergedPrs, setMergedPrs] = useState<Record<number, boolean>>({});
+  const [mergedBranches, setMergedBranches] = useState<Record<string, boolean>>({});
 
   // Initial prompt state
   const [initialPrompt, setInitialPrompt] = useState('');
@@ -62,37 +62,51 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       const acts = await julesService.getActivities(id);
       setActivities(acts);
 
-      // Perform auto-merge if Jules has completed the task and left a pull request URL
+      // Perform direct quiet merge if Jules has completed the task
       if (sess.state === 'COMPLETED' && gitHubService) {
-        // Read pull request outputs
-        const outputs = (sess as any).outputs || [];
-        for (const output of outputs) {
-          if (output.pullRequest && output.pullRequest.url) {
-            const prUrl = output.pullRequest.url;
-            // Parse pull request number from url e.g. "https://github.com/owner/repo/pull/12"
-            const match = prUrl.match(/\/pull\/(\d+)/);
-            if (match && match[1]) {
-              const prNumber = parseInt(match[1], 10);
+        try {
+          logger.info('ChatScreen: Fetching repo branches to perform direct quiet merge...');
+          const branches = await gitHubService.getBranches(selectedRepo.owner.login, selectedRepo.name);
 
-              // Only trigger merge once per PR to avoid spamming the PUT call
-              if (!mergedPrs[prNumber]) {
-                logger.info(`Detected completed session PR #${prNumber}. Triggering auto-merge...`);
-                // Mark as merged in local state immediately to avoid concurrent runs
-                setMergedPrs((prev) => ({ ...prev, [prNumber]: true }));
+          for (const branch of branches) {
+            const branchName = branch.name;
+
+            // Look for any branch starting with 'jules-' that is not the default branch
+            if (branchName.startsWith('jules-') && branchName !== selectedRepo.default_branch) {
+              if (!mergedBranches[branchName]) {
+                logger.info(`ChatScreen: Detected completed session branch "${branchName}". Triggering quiet direct merge...`);
+
+                // Immediately mark as merged locally to prevent concurrent/duplicate API requests
+                setMergedBranches((prev) => ({ ...prev, [branchName]: true }));
 
                 try {
-                  const mergeResult = await gitHubService.mergePullRequest(
+                  const mergeResult = await gitHubService.mergeBranch(
                     selectedRepo.owner.login,
                     selectedRepo.name,
-                    prNumber
+                    selectedRepo.default_branch,
+                    branchName
                   );
-                  logger.info(`PR #${prNumber} merged successfully: ${JSON.stringify(mergeResult)}`);
+                  logger.info(`ChatScreen: Branch "${branchName}" merged successfully quietly: ${JSON.stringify(mergeResult)}`);
+
+                  // Delete the branch quietly to clean up references
+                  try {
+                    await gitHubService.deleteBranch(
+                      selectedRepo.owner.login,
+                      selectedRepo.name,
+                      branchName
+                    );
+                    logger.info(`ChatScreen: Branch "${branchName}" deleted successfully quietly.`);
+                  } catch (deleteErr: any) {
+                    logger.warn(`ChatScreen: Quiet branch deletion failed for "${branchName}": ${deleteErr.message}`);
+                  }
                 } catch (mergeErr: any) {
-                  logger.error(`PR #${prNumber} merge failed: ${mergeErr.message}`);
+                  logger.error(`ChatScreen: Direct merge failed for branch "${branchName}": ${mergeErr.message}`);
                 }
               }
             }
           }
+        } catch (e: any) {
+          logger.warn(`ChatScreen: Failed to list/merge branches: ${e.message}`);
         }
       }
     } catch (e: any) {

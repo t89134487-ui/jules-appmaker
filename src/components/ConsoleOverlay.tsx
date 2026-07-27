@@ -78,7 +78,6 @@ export const ConsoleOverlay: React.FC<ConsoleOverlayProps> = ({ visible, onClose
             data={logs}
             keyExtractor={(_, index) => index.toString()}
             contentContainerStyle={styles.logList}
-            onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
             renderItem={({ item }) => (
               <View style={styles.logRow}>
                 <Text style={styles.logTimestamp}>[{item.timestamp}]</Text>

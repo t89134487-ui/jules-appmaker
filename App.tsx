@@ -95,8 +95,6 @@ export default function App() {
       logger.info('Logging out. Clearing keys from AsyncStorage...');
       await AsyncStorage.removeItem('@github_token');
       await AsyncStorage.removeItem('@jules_api_key');
-      await AsyncStorage.removeItem('@cached_repos');
-      await AsyncStorage.removeItem('@cached_connected_sources');
     } catch (e: any) {
       logger.error(`Logout AsyncStorage clear failed: ${e.message}`);
     }

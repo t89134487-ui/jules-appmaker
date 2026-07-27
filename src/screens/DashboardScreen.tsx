@@ -56,76 +56,34 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
   const [repoSelectorVisible, setRepoSelectorVisible] = useState(false);
   const [repoSearchQuery, setRepoSearchQuery] = useState('');
 
-  const loadCache = async () => {
-    try {
-      logger.info('Checking for cached data...');
-      const cachedReposStr = await AsyncStorage.getItem('@cached_repos');
-      const cachedSourcesStr = await AsyncStorage.getItem('@cached_connected_sources');
-      const cachedChatsStr = await AsyncStorage.getItem('@cached_chats');
-
-      if (cachedReposStr) {
-        const cachedRepos = JSON.parse(cachedReposStr);
-        setRepos(cachedRepos);
-        logger.info(`Loaded ${cachedRepos.length} cached repositories from AsyncStorage.`);
-      }
-      if (cachedSourcesStr) {
-        const cachedSources = JSON.parse(cachedSourcesStr);
-        setConnectedSources(cachedSources);
-        logger.info(`Loaded ${cachedSources.length} cached sources from AsyncStorage.`);
-      }
-      if (cachedChatsStr) {
-        const cachedChats = JSON.parse(cachedChatsStr);
-        setAllSessions(cachedChats);
-        logger.info(`Loaded ${cachedChats.length} cached chats from AsyncStorage.`);
-      }
-    } catch (e: any) {
-      logger.warn(`Failed to load repository cache: ${e.message}`);
-    }
-  };
-
-  const fetchRepos = async (isBackground = false) => {
-    if (!isBackground) {
-      setLoading(true);
-    }
+  const fetchRepos = async () => {
+    setLoading(true);
     try {
       logger.info('Fetching GitHub repositories...');
       const data = await githubService.getRepositories();
       setRepos(data);
-      await AsyncStorage.setItem('@cached_repos', JSON.stringify(data));
 
       if (julesService) {
         logger.info('Fetching Jules connected sources...');
         const sources = await julesService.getSources();
         setConnectedSources(sources);
-        await AsyncStorage.setItem('@cached_connected_sources', JSON.stringify(sources));
         logger.info(`Found ${sources.length} connected Jules sources.`);
 
         logger.info('Fetching Jules active sessions/threads...');
         const sessions = await julesService.getSessions();
         setAllSessions(sessions);
-        await AsyncStorage.setItem('@cached_chats', JSON.stringify(sessions));
         logger.info(`Found ${sessions.length} sessions/threads in total.`);
       }
     } catch (e: any) {
       logger.error(`Error fetching resources: ${e.message}`);
-      if (!isBackground) {
-        Alert.alert('Error Fetching Data', e.message);
-      }
+      Alert.alert('Error Fetching Data', e.message);
     } finally {
-      if (!isBackground) {
-        setLoading(false);
-      }
+      setLoading(false);
     }
   };
 
   useEffect(() => {
-    const init = async () => {
-      await loadCache();
-      const cachedReposStr = await AsyncStorage.getItem('@cached_repos');
-      // If we have cached repos, do a silent background fetch to keep things fresh.
-      await fetchRepos(!!cachedReposStr);
-    };
-    init();
+    fetchRepos();
   }, []);
 
   const handleCreateRepo = async () => {
