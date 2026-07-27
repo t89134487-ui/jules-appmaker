@@ -10,6 +10,7 @@ import {
   Modal,
   Alert,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ClipboardExpo from 'expo-clipboard';
 import { GitHubRepo, GitHubService } from '../services/github';
 import { JulesService, JulesSource } from '../services/jules';
@@ -51,17 +52,42 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
   const [threadLoading, setThreadLoading] = useState(false);
   const [targetRepoForThreads, setTargetRepoForThreads] = useState<GitHubRepo | null>(null);
 
-  const fetchRepos = async () => {
-    setLoading(true);
+  const loadCache = async () => {
+    try {
+      logger.info('Checking for cached repository data...');
+      const cachedReposStr = await AsyncStorage.getItem('@cached_repos');
+      const cachedSourcesStr = await AsyncStorage.getItem('@cached_connected_sources');
+
+      if (cachedReposStr) {
+        const cachedRepos = JSON.parse(cachedReposStr);
+        setRepos(cachedRepos);
+        logger.info(`Loaded ${cachedRepos.length} cached repositories from AsyncStorage.`);
+      }
+      if (cachedSourcesStr) {
+        const cachedSources = JSON.parse(cachedSourcesStr);
+        setConnectedSources(cachedSources);
+        logger.info(`Loaded ${cachedSources.length} cached sources from AsyncStorage.`);
+      }
+    } catch (e: any) {
+      logger.warn(`Failed to load repository cache: ${e.message}`);
+    }
+  };
+
+  const fetchRepos = async (isBackground = false) => {
+    if (!isBackground) {
+      setLoading(true);
+    }
     try {
       logger.info('Fetching GitHub repositories...');
       const data = await githubService.getRepositories();
       setRepos(data);
+      await AsyncStorage.setItem('@cached_repos', JSON.stringify(data));
 
       if (julesService) {
         logger.info('Fetching Jules connected sources...');
         const sources = await julesService.getSources();
         setConnectedSources(sources);
+        await AsyncStorage.setItem('@cached_connected_sources', JSON.stringify(sources));
         logger.info(`Found ${sources.length} connected Jules sources.`);
 
         logger.info('Fetching Jules active sessions/threads...');
@@ -71,14 +97,24 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
       }
     } catch (e: any) {
       logger.error(`Error fetching resources: ${e.message}`);
-      Alert.alert('Error Fetching Data', e.message);
+      if (!isBackground) {
+        Alert.alert('Error Fetching Data', e.message);
+      }
     } finally {
-      setLoading(false);
+      if (!isBackground) {
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
-    fetchRepos();
+    const init = async () => {
+      await loadCache();
+      const cachedReposStr = await AsyncStorage.getItem('@cached_repos');
+      // If we have cached repos, do a silent background fetch to keep things fresh.
+      await fetchRepos(!!cachedReposStr);
+    };
+    init();
   }, []);
 
   const handleCreateRepo = async () => {

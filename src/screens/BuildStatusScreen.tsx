@@ -16,6 +16,7 @@ interface BuildStatusScreenProps {
   githubService: GitHubService;
   repoOwner: string;
   repoName: string;
+  defaultBranch?: string;
   onBack: () => void;
 }
 
@@ -23,10 +24,12 @@ export const BuildStatusScreen: React.FC<BuildStatusScreenProps> = ({
   githubService,
   repoOwner,
   repoName,
+  defaultBranch,
   onBack,
 }) => {
   const [runs, setRuns] = useState<GitHubWorkflowRun[]>([]);
   const [apkAsset, setApkAsset] = useState<GitHubReleaseAsset | null>(null);
+  const [currentCommitSha, setCurrentCommitSha] = useState<string | null>(null);
   const [polling, setPolling] = useState(true);
   const [loading, setLoading] = useState(false);
 
@@ -35,14 +38,25 @@ export const BuildStatusScreen: React.FC<BuildStatusScreenProps> = ({
       // 1. Get Action workflow runs
       const actionRuns = await githubService.getWorkflowRuns(repoOwner, repoName);
       setRuns(actionRuns);
+    } catch (e) {
+      console.warn('Failed to query workflow runs', e);
+    }
 
-      // 2. Try to locate latest released APK asset
-      const apk = await githubService.getLatestApkAsset(repoOwner, repoName);
-      if (apk) {
+    try {
+      // 2. Get the latest commit SHA of the default branch
+      const branchName = defaultBranch || 'main';
+      const commitSha = await githubService.getLatestCommitSha(repoOwner, repoName, branchName);
+      setCurrentCommitSha(commitSha);
+
+      if (commitSha) {
+        // 3. Try to locate released APK asset specifically for this commit
+        const shortSha = commitSha.substring(0, 7);
+        const apk = await githubService.getApkAssetForCommit(repoOwner, repoName, shortSha);
         setApkAsset(apk);
       }
     } catch (e) {
-      console.warn('Failed to query build status', e);
+      console.warn('Failed to query commit/release status', e);
+      setApkAsset(null);
     }
   };
 
@@ -140,6 +154,9 @@ export const BuildStatusScreen: React.FC<BuildStatusScreenProps> = ({
                 <Text style={styles.downloadBtnText}>Install / Download APK</Text>
               </TouchableOpacity>
               <Text style={styles.apkMeta}>{apkAsset.name}</Text>
+              {currentCommitSha ? (
+                <Text style={styles.commitText}>Commit: {currentCommitSha.substring(0, 7)}</Text>
+              ) : null}
             </View>
           ) : (
             <View style={styles.apkCardPending}>
@@ -148,6 +165,9 @@ export const BuildStatusScreen: React.FC<BuildStatusScreenProps> = ({
               <Text style={styles.apkPendingDesc}>
                 The CI build typically takes 3 to 5 minutes. As soon as the APK is compiled and released, it will appear right here for one-click install!
               </Text>
+              {currentCommitSha ? (
+                <Text style={styles.commitTextPending}>Target Commit: {currentCommitSha.substring(0, 7)}</Text>
+              ) : null}
             </View>
           )}
         </View>
@@ -332,5 +352,17 @@ const styles = StyleSheet.create({
     fontSize: 13,
     textAlign: 'center',
     lineHeight: 18,
+  },
+  commitText: {
+    color: '#10b981',
+    fontSize: 12,
+    marginTop: 8,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+  },
+  commitTextPending: {
+    color: '#a0a0ab',
+    fontSize: 12,
+    marginTop: 16,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
   },
 });
