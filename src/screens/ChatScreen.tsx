@@ -23,6 +23,7 @@ interface ChatScreenProps {
   gitHubService?: GitHubService | null; // Pass GitHub service for dynamic merge execution
   selectedRepo: GitHubRepo;
   initialSessionId?: string | null;
+  hasExistingSessions?: boolean;
   onSessionStarted: (sessionId: string) => void;
   onSessionStateFetched?: (state: string) => void;
   onViewBuildProgress?: () => void;
@@ -34,6 +35,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   gitHubService,
   selectedRepo,
   initialSessionId,
+  hasExistingSessions,
   onSessionStarted,
   onSessionStateFetched,
   onViewBuildProgress,
@@ -45,6 +47,24 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   const [message, setMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [mergedBranches, setMergedBranches] = useState<Record<string, boolean>>({});
+  interface LocalMergeStatus {
+    id: string;
+    text: string;
+    createTime: string;
+  }
+  const [localMergeStatuses, setLocalMergeStatuses] = useState<LocalMergeStatus[]>([]);
+  const [hasAttemptedMerge, setHasAttemptedMerge] = useState(false);
+
+  const addMergeStatus = (status: string) => {
+    setLocalMergeStatuses((prev) => [
+      ...prev,
+      {
+        id: `local-merge-${Math.random()}-${Date.now()}`,
+        text: status,
+        createTime: new Date().toISOString(),
+      },
+    ]);
+  };
 
   // Initial prompt state
   const [initialPrompt, setInitialPrompt] = useState('');
@@ -63,30 +83,56 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       setActivities(acts);
 
       // Perform direct quiet merge if Jules has completed the task
-      if (sess.state === 'COMPLETED' && gitHubService) {
+      if (sess.state?.toUpperCase() === 'COMPLETED' && gitHubService && !hasAttemptedMerge) {
+        setHasAttemptedMerge(true);
         try {
           logger.info('ChatScreen: Fetching repo branches to perform direct quiet merge...');
+          addMergeStatus('Checking repository branches to integrate code...');
           const branches = await gitHubService.getBranches(selectedRepo.owner.login, selectedRepo.name);
 
+          let matchedAnyBranch = false;
           for (const branch of branches) {
             const branchName = branch.name;
 
             // Look for any branch starting with 'jules-' that is not the default branch
             if (branchName.startsWith('jules-') && branchName !== selectedRepo.default_branch) {
+              matchedAnyBranch = true;
               if (!mergedBranches[branchName]) {
-                logger.info(`ChatScreen: Detected completed session branch "${branchName}". Triggering quiet direct merge...`);
+                logger.info(`ChatScreen: Detected completed session branch "${branchName}". Triggering PR creation & rebase merge...`);
+                addMergeStatus(`Integrating development branch "${branchName}" via rebase...`);
 
                 // Immediately mark as merged locally to prevent concurrent/duplicate API requests
                 setMergedBranches((prev) => ({ ...prev, [branchName]: true }));
 
                 try {
-                  const mergeResult = await gitHubService.mergeBranch(
+                  // Fetch open PRs to see if one already exists
+                  const openPrs = await gitHubService.getOpenPullRequests(selectedRepo.owner.login, selectedRepo.name);
+                  let pr = openPrs.find((p: any) => p.head && p.head.ref === branchName);
+
+                  if (!pr) {
+                    logger.info(`ChatScreen: No open PR found for branch "${branchName}". Creating new PR...`);
+                    addMergeStatus(`Creating integration Pull Request for "${branchName}"...`);
+                    pr = await gitHubService.createPullRequest(
+                      selectedRepo.owner.login,
+                      selectedRepo.name,
+                      `Merge Jules development branch "${branchName}"`,
+                      branchName,
+                      selectedRepo.default_branch
+                    );
+                  }
+
+                  const prNumber = pr.number;
+                  logger.info(`ChatScreen: Merging PR #${prNumber} via rebase...`);
+                  addMergeStatus(`Performing fast-forward rebase merge for PR #${prNumber}...`);
+
+                  const mergeResult = await gitHubService.mergePullRequest(
                     selectedRepo.owner.login,
                     selectedRepo.name,
-                    selectedRepo.default_branch,
-                    branchName
+                    prNumber,
+                    'rebase'
                   );
-                  logger.info(`ChatScreen: Branch "${branchName}" merged successfully quietly: ${JSON.stringify(mergeResult)}`);
+                  logger.info(`ChatScreen: PR #${prNumber} merged successfully via rebase: ${JSON.stringify(mergeResult)}`);
+                  addMergeStatus(`Rebase merge complete! Cleaning up development branch "${branchName}"...`);
 
                   // Delete the branch quietly to clean up references
                   try {
@@ -96,17 +142,24 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                       branchName
                     );
                     logger.info(`ChatScreen: Branch "${branchName}" deleted successfully quietly.`);
+                    addMergeStatus(`Integrated "${branchName}" successfully via rebase and cleaned up branch.`);
                   } catch (deleteErr: any) {
                     logger.warn(`ChatScreen: Quiet branch deletion failed for "${branchName}": ${deleteErr.message}`);
+                    addMergeStatus(`Integrated "${branchName}" successfully via rebase (cleanup skipped).`);
                   }
                 } catch (mergeErr: any) {
-                  logger.error(`ChatScreen: Direct merge failed for branch "${branchName}": ${mergeErr.message}`);
+                  logger.error(`ChatScreen: Rebase merge failed for branch "${branchName}": ${mergeErr.message}`);
+                  addMergeStatus(`Failed to integrate branch: ${mergeErr.message}`);
                 }
               }
             }
           }
+          if (!matchedAnyBranch) {
+            addMergeStatus('Code changes are already integrated into the default branch.');
+          }
         } catch (e: any) {
           logger.warn(`ChatScreen: Failed to list/merge branches: ${e.message}`);
+          addMergeStatus(`Branch integration lookup failed: ${e.message}`);
         }
       }
     } catch (e: any) {
@@ -119,6 +172,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     if (initialSessionId) {
       logger.info(`Resuming existing session thread: ${initialSessionId}`);
       setLoading(true);
+      setLocalMergeStatuses([]);
+      setHasAttemptedMerge(false);
       fetchSessionState(initialSessionId)
         .then(() => {
           onSessionStarted(initialSessionId);
@@ -129,6 +184,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     } else {
       setSession(null);
       setActivities([]);
+      setLocalMergeStatuses([]);
+      setHasAttemptedMerge(false);
     }
   }, [initialSessionId]);
 
@@ -164,9 +221,11 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     logger.info(`Starting session for repo: ${selectedRepo.owner.login}/${selectedRepo.name}`);
     setLoading(true);
     try {
-      // Append core CI generation prompt instructions autonomously!
+      // Append core CI generation prompt instructions autonomously ONLY if the repo has no existing sessions!
       // Letting Jules decide the language, framework, and toolchain autonomously (e.g. Jetpack Compose/Kotlin, Flutter, etc.)
-      const augmentedPrompt = `${initialPrompt.trim()}
+      const augmentedPrompt = hasExistingSessions
+        ? initialPrompt.trim()
+        : `${initialPrompt.trim()}
 
       ## MANDATORY REQUIREMENTS
       - You have complete freedom to choose the best framework, language, or toolchain (such as Kotlin/Jetpack Compose, Flutter, React Native, etc.) to build this Android application.
@@ -185,6 +244,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       });
 
       logger.info(`Session created successfully. ID: ${newSession.id}. State: ${newSession.state}`);
+      setLocalMergeStatuses([]);
+      setHasAttemptedMerge(false);
       setSession(newSession);
       onSessionStarted(newSession.id);
       logger.info('Fetching initial activities...');
@@ -313,6 +374,19 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     return null;
   };
 
+  // Combined chronological feed of API activities and local merge statuses
+  const combinedFeed = [
+    ...activities.map(act => ({ ...act, isLocalMergeStatus: false })),
+    ...localMergeStatuses.map(status => ({
+      id: status.id,
+      isLocalMergeStatus: true,
+      description: status.text,
+      createTime: status.createTime,
+    }))
+  ].sort((a, b) => new Date(a.createTime).getTime() - new Date(b.createTime).getTime());
+
+  const lastLocalMergeIdx = combinedFeed.map(item => !!item.isLocalMergeStatus).lastIndexOf(true);
+
   // If no session active, show creation panel
   if (!session) {
     return (
@@ -366,19 +440,17 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     >
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={onBack}>
+        <TouchableOpacity onPress={onBack} style={{ width: 60 }}>
           <Text style={styles.backText}>← Back</Text>
         </TouchableOpacity>
         <View style={styles.headerMeta}>
-          <Text style={styles.headerTitle}>{selectedRepo.name}</Text>
+          <Text style={styles.headerTitle} numberOfLines={1}>{selectedRepo.name}</Text>
           <View style={styles.statusRow}>
             <View style={[styles.statusDot, { backgroundColor: getStatusColor(session.state) }]} />
             <Text style={styles.statusLabel}>{session.state}</Text>
           </View>
         </View>
-        <TouchableOpacity style={styles.refreshHeaderBtn} onPress={() => fetchSessionState(session.id)}>
-          <Text style={styles.refreshHeaderText}>🔄 Refresh</Text>
-        </TouchableOpacity>
+        <View style={{ width: 60 }} />
       </View>
 
       {/* Chat Area */}
@@ -394,19 +466,24 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
           </Text>
         </View>
 
-        {activities.map(renderActivityItem)}
-
-        {session.state === 'COMPLETED' && (
-          <View style={styles.completedCard}>
-            <Text style={styles.completedTitle}>🏆 Task Complete!</Text>
-            <Text style={styles.completedDesc}>Jules has successfully generated the code and merged it directly into your branch.</Text>
-            {onViewBuildProgress && (
-              <TouchableOpacity style={styles.chatBuildBtn} onPress={onViewBuildProgress}>
-                <Text style={styles.chatBuildBtnText}>🚀 View APK Build Progress</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        )}
+        {combinedFeed.map((item, idx) => {
+          if (item.isLocalMergeStatus) {
+            const isLastLocalMerge = idx === lastLocalMergeIdx;
+            return (
+              <View key={item.id} style={styles.mergeStatusCard}>
+                <Text style={styles.mergeStatusTitle}>⚙️ Integration Status</Text>
+                <Text style={styles.mergeStatusDesc}>{item.description}</Text>
+                {isLastLocalMerge && onViewBuildProgress && (
+                  <TouchableOpacity style={[styles.chatBuildBtn, { marginTop: 12 }]} onPress={onViewBuildProgress}>
+                    <Text style={styles.chatBuildBtnText}>🚀 View APK Build Progress</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            );
+          } else {
+            return renderActivityItem(item as unknown as JulesActivity);
+          }
+        })}
       </ScrollView>
 
       {/* Input bar */}
@@ -784,6 +861,26 @@ const styles = StyleSheet.create({
   statusCardTextFallback: {
     color: '#a0a0ab',
     fontSize: 13,
+    lineHeight: 18,
+  },
+  mergeStatusCard: {
+    backgroundColor: 'rgba(245, 158, 11, 0.1)',
+    borderWidth: 1,
+    borderColor: '#f59e0b',
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 12,
+    alignSelf: 'stretch',
+  },
+  mergeStatusTitle: {
+    color: '#f59e0b',
+    fontWeight: 'bold',
+    fontSize: 14,
+    marginBottom: 4,
+  },
+  mergeStatusDesc: {
+    color: '#a0a0ab',
+    fontSize: 12,
     lineHeight: 18,
   },
 });
