@@ -18,7 +18,7 @@ import { logger } from '../services/logger';
 interface DashboardScreenProps {
   githubService: GitHubService;
   julesService: JulesService | null;
-  onSelectRepo: (repo: GitHubRepo, sessionId?: string) => void;
+  onSelectRepo: (repo: GitHubRepo, sessionId?: string, hasExistingSessions?: boolean) => void;
   onLogout: () => void;
 }
 
@@ -54,6 +54,17 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
   // New Repository Selector fields
   const [repoSelectorVisible, setRepoSelectorVisible] = useState(false);
   const [repoSearchQuery, setRepoSearchQuery] = useState('');
+
+  const repoHasExistingSessions = (repo: GitHubRepo): boolean => {
+    return allSessions.some((sess) => {
+      const sourceCtx = sess.sourceContext?.source || '';
+      const lowerSource = sourceCtx.toLowerCase();
+      return (
+        lowerSource.includes(repo.name.toLowerCase()) &&
+        lowerSource.includes(repo.owner.login.toLowerCase())
+      );
+    });
+  };
 
   const fetchRepos = async () => {
     setLoading(true);
@@ -289,7 +300,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
             return (
               <TouchableOpacity
                 style={styles.chatCardMain}
-                onPress={() => onSelectRepo(repo, item.id)}
+                onPress={() => onSelectRepo(repo, item.id, true)}
               >
                 <View style={styles.chatHeaderMain}>
                   <Text style={styles.chatTitleMain} numberOfLines={1}>
@@ -381,7 +392,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
                         setJustCreatedRepo(item);
                         setGuideModalVisible(true);
                       } else {
-                        onSelectRepo(item); // Clean session
+                        onSelectRepo(item, undefined, repoHasExistingSessions(item)); // Clean session
                       }
                     }}
                   >
@@ -499,7 +510,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
               onPress={() => {
                 setThreadsModalVisible(false);
                 if (targetRepoForThreads) {
-                  onSelectRepo(targetRepoForThreads); // Start clean session
+                  onSelectRepo(targetRepoForThreads, undefined, repoHasExistingSessions(targetRepoForThreads)); // Start clean session
                 }
               }}
             >
@@ -518,7 +529,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
                   onPress={() => {
                     setThreadsModalVisible(false);
                     if (targetRepoForThreads) {
-                      onSelectRepo(targetRepoForThreads, item.id); // Resume session
+                      onSelectRepo(targetRepoForThreads, item.id, true); // Resume session
                     }
                   }}
                 >
@@ -588,7 +599,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
               onPress={() => {
                 setGuideModalVisible(false);
                 if (justCreatedRepo) {
-                  onSelectRepo(justCreatedRepo);
+                  onSelectRepo(justCreatedRepo, undefined, false);
                 }
               }}
             >

@@ -23,6 +23,7 @@ interface ChatScreenProps {
   gitHubService?: GitHubService | null; // Pass GitHub service for dynamic merge execution
   selectedRepo: GitHubRepo;
   initialSessionId?: string | null;
+  hasExistingSessions?: boolean;
   onSessionStarted: (sessionId: string) => void;
   onSessionStateFetched?: (state: string) => void;
   onViewBuildProgress?: () => void;
@@ -34,6 +35,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   gitHubService,
   selectedRepo,
   initialSessionId,
+  hasExistingSessions,
   onSessionStarted,
   onSessionStateFetched,
   onViewBuildProgress,
@@ -45,6 +47,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   const [message, setMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [mergedBranches, setMergedBranches] = useState<Record<string, boolean>>({});
+  const [mergeStatus, setMergeStatus] = useState<string | null>(null);
 
   // Initial prompt state
   const [initialPrompt, setInitialPrompt] = useState('');
@@ -63,18 +66,22 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       setActivities(acts);
 
       // Perform direct quiet merge if Jules has completed the task
-      if (sess.state === 'COMPLETED' && gitHubService) {
+      if (sess.state?.toUpperCase() === 'COMPLETED' && gitHubService) {
         try {
           logger.info('ChatScreen: Fetching repo branches to perform direct quiet merge...');
+          setMergeStatus('Checking repository branches to integrate code...');
           const branches = await gitHubService.getBranches(selectedRepo.owner.login, selectedRepo.name);
 
+          let matchedAnyBranch = false;
           for (const branch of branches) {
             const branchName = branch.name;
 
             // Look for any branch starting with 'jules-' that is not the default branch
             if (branchName.startsWith('jules-') && branchName !== selectedRepo.default_branch) {
+              matchedAnyBranch = true;
               if (!mergedBranches[branchName]) {
                 logger.info(`ChatScreen: Detected completed session branch "${branchName}". Triggering quiet direct merge...`);
+                setMergeStatus(`Merging development branch "${branchName}"...`);
 
                 // Immediately mark as merged locally to prevent concurrent/duplicate API requests
                 setMergedBranches((prev) => ({ ...prev, [branchName]: true }));
@@ -87,6 +94,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                     branchName
                   );
                   logger.info(`ChatScreen: Branch "${branchName}" merged successfully quietly: ${JSON.stringify(mergeResult)}`);
+                  setMergeStatus(`Branch "${branchName}" merged successfully! Cleaning up...`);
 
                   // Delete the branch quietly to clean up references
                   try {
@@ -96,17 +104,24 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                       branchName
                     );
                     logger.info(`ChatScreen: Branch "${branchName}" deleted successfully quietly.`);
+                    setMergeStatus(`Integrated development branch "${branchName}" and cleaned up references.`);
                   } catch (deleteErr: any) {
                     logger.warn(`ChatScreen: Quiet branch deletion failed for "${branchName}": ${deleteErr.message}`);
+                    setMergeStatus(`Integrated "${branchName}" (reference cleanup skipped).`);
                   }
                 } catch (mergeErr: any) {
                   logger.error(`ChatScreen: Direct merge failed for branch "${branchName}": ${mergeErr.message}`);
+                  setMergeStatus(`Failed to merge branch: ${mergeErr.message}`);
                 }
               }
             }
           }
+          if (!matchedAnyBranch) {
+            setMergeStatus('Code changes are already integrated into the default branch.');
+          }
         } catch (e: any) {
           logger.warn(`ChatScreen: Failed to list/merge branches: ${e.message}`);
+          setMergeStatus(`Branch integration lookup failed: ${e.message}`);
         }
       }
     } catch (e: any) {
@@ -164,9 +179,11 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     logger.info(`Starting session for repo: ${selectedRepo.owner.login}/${selectedRepo.name}`);
     setLoading(true);
     try {
-      // Append core CI generation prompt instructions autonomously!
+      // Append core CI generation prompt instructions autonomously ONLY if the repo has no existing sessions!
       // Letting Jules decide the language, framework, and toolchain autonomously (e.g. Jetpack Compose/Kotlin, Flutter, etc.)
-      const augmentedPrompt = `${initialPrompt.trim()}
+      const augmentedPrompt = hasExistingSessions
+        ? initialPrompt.trim()
+        : `${initialPrompt.trim()}
 
       ## MANDATORY REQUIREMENTS
       - You have complete freedom to choose the best framework, language, or toolchain (such as Kotlin/Jetpack Compose, Flutter, React Native, etc.) to build this Android application.
@@ -292,6 +309,22 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       );
     }
 
+    if (act.sessionCompleted) {
+      return (
+        <View key={act.id} style={styles.completedCardInline}>
+          <Text style={styles.completedTitleInline}>🏆 Task Complete!</Text>
+          <Text style={styles.completedDescInline}>
+            {act.description || 'Jules has successfully generated the code and completed the tasks.'}
+          </Text>
+          {onViewBuildProgress && (
+            <TouchableOpacity style={styles.chatBuildBtnInline} onPress={onViewBuildProgress}>
+              <Text style={styles.chatBuildBtnTextInline}>🚀 View APK Build Progress</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      );
+    }
+
     if (act.sessionFailed) {
       return (
         <View key={act.id} style={styles.failedCard}>
@@ -366,19 +399,17 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     >
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={onBack}>
+        <TouchableOpacity onPress={onBack} style={{ width: 60 }}>
           <Text style={styles.backText}>← Back</Text>
         </TouchableOpacity>
         <View style={styles.headerMeta}>
-          <Text style={styles.headerTitle}>{selectedRepo.name}</Text>
+          <Text style={styles.headerTitle} numberOfLines={1}>{selectedRepo.name}</Text>
           <View style={styles.statusRow}>
             <View style={[styles.statusDot, { backgroundColor: getStatusColor(session.state) }]} />
             <Text style={styles.statusLabel}>{session.state}</Text>
           </View>
         </View>
-        <TouchableOpacity style={styles.refreshHeaderBtn} onPress={() => fetchSessionState(session.id)}>
-          <Text style={styles.refreshHeaderText}>🔄 Refresh</Text>
-        </TouchableOpacity>
+        <View style={{ width: 60 }} />
       </View>
 
       {/* Chat Area */}
@@ -395,6 +426,13 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
         </View>
 
         {activities.map(renderActivityItem)}
+
+        {mergeStatus && (
+          <View style={styles.mergeStatusCard}>
+            <Text style={styles.mergeStatusTitle}>⚙️ Integration Status</Text>
+            <Text style={styles.mergeStatusDesc}>{mergeStatus}</Text>
+          </View>
+        )}
 
         {session.state === 'COMPLETED' && (
           <View style={styles.completedCard}>
@@ -784,6 +822,59 @@ const styles = StyleSheet.create({
   statusCardTextFallback: {
     color: '#a0a0ab',
     fontSize: 13,
+    lineHeight: 18,
+  },
+  completedCardInline: {
+    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+    borderWidth: 1,
+    borderColor: '#10b981',
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 12,
+    alignSelf: 'stretch',
+  },
+  completedTitleInline: {
+    color: '#10b981',
+    fontWeight: 'bold',
+    fontSize: 14,
+    marginBottom: 4,
+  },
+  completedDescInline: {
+    color: '#a0a0ab',
+    fontSize: 12,
+    marginBottom: 12,
+  },
+  chatBuildBtnInline: {
+    backgroundColor: '#10b981',
+    borderRadius: 8,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 6,
+  },
+  chatBuildBtnTextInline: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 13,
+  },
+  mergeStatusCard: {
+    backgroundColor: 'rgba(245, 158, 11, 0.1)',
+    borderWidth: 1,
+    borderColor: '#f59e0b',
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 12,
+    alignSelf: 'stretch',
+  },
+  mergeStatusTitle: {
+    color: '#f59e0b',
+    fontWeight: 'bold',
+    fontSize: 14,
+    marginBottom: 4,
+  },
+  mergeStatusDesc: {
+    color: '#a0a0ab',
+    fontSize: 12,
     lineHeight: 18,
   },
 });
