@@ -48,6 +48,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   const [submitting, setSubmitting] = useState(false);
   const [mergedBranches, setMergedBranches] = useState<Record<string, boolean>>({});
   const [mergeStatus, setMergeStatus] = useState<string | null>(null);
+  const [hasAttemptedMerge, setHasAttemptedMerge] = useState(false);
 
   // Initial prompt state
   const [initialPrompt, setInitialPrompt] = useState('');
@@ -66,7 +67,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       setActivities(acts);
 
       // Perform direct quiet merge if Jules has completed the task
-      if (sess.state?.toUpperCase() === 'COMPLETED' && gitHubService) {
+      if (sess.state?.toUpperCase() === 'COMPLETED' && gitHubService && !hasAttemptedMerge) {
+        setHasAttemptedMerge(true);
         try {
           logger.info('ChatScreen: Fetching repo branches to perform direct quiet merge...');
           setMergeStatus('Checking repository branches to integrate code...');
@@ -134,6 +136,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     if (initialSessionId) {
       logger.info(`Resuming existing session thread: ${initialSessionId}`);
       setLoading(true);
+      setMergeStatus(null);
+      setHasAttemptedMerge(false);
       fetchSessionState(initialSessionId)
         .then(() => {
           onSessionStarted(initialSessionId);
@@ -144,6 +148,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     } else {
       setSession(null);
       setActivities([]);
+      setMergeStatus(null);
+      setHasAttemptedMerge(false);
     }
   }, [initialSessionId]);
 
@@ -202,6 +208,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       });
 
       logger.info(`Session created successfully. ID: ${newSession.id}. State: ${newSession.state}`);
+      setMergeStatus(null);
+      setHasAttemptedMerge(false);
       setSession(newSession);
       onSessionStarted(newSession.id);
       logger.info('Fetching initial activities...');
@@ -434,7 +442,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
           </View>
         )}
 
-        {session.state === 'COMPLETED' && (
+        {session.state?.toUpperCase() === 'COMPLETED' && (
           <View style={styles.completedCard}>
             <Text style={styles.completedTitle}>🏆 Task Complete!</Text>
             <Text style={styles.completedDesc}>Jules has successfully generated the code and merged it directly into your branch.</Text>
@@ -823,39 +831,6 @@ const styles = StyleSheet.create({
     color: '#a0a0ab',
     fontSize: 13,
     lineHeight: 18,
-  },
-  completedCardInline: {
-    backgroundColor: 'rgba(16, 185, 129, 0.1)',
-    borderWidth: 1,
-    borderColor: '#10b981',
-    borderRadius: 10,
-    padding: 14,
-    marginBottom: 12,
-    alignSelf: 'stretch',
-  },
-  completedTitleInline: {
-    color: '#10b981',
-    fontWeight: 'bold',
-    fontSize: 14,
-    marginBottom: 4,
-  },
-  completedDescInline: {
-    color: '#a0a0ab',
-    fontSize: 12,
-    marginBottom: 12,
-  },
-  chatBuildBtnInline: {
-    backgroundColor: '#10b981',
-    borderRadius: 8,
-    height: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 6,
-  },
-  chatBuildBtnTextInline: {
-    color: '#fff',
-    fontWeight: 'bold',
-    fontSize: 13,
   },
   mergeStatusCard: {
     backgroundColor: 'rgba(245, 158, 11, 0.1)',
