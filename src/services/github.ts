@@ -98,6 +98,19 @@ export class GitHubService {
   }
 
   /**
+   * Fetches open Pull Requests for a given repository.
+   */
+  async getOpenPullRequests(owner: string, repo: string): Promise<any[]> {
+    logger.info(`GitHubService: Fetching open Pull Requests for ${owner}/${repo}...`);
+    try {
+      return await this.fetchWithAuth(`https://api.github.com/repos/${owner}/${repo}/pulls?state=open`);
+    } catch (e) {
+      logger.warn(`Failed to fetch open Pull Requests: ${e}`);
+      return [];
+    }
+  }
+
+  /**
    * Fetches the user profile details.
    */
   async getUserProfile(): Promise<{ login: string; avatar_url: string; name: string }> {
@@ -203,5 +216,43 @@ export class GitHubService {
     }
     logger.info(`GitHubService: No matching APK release asset found for commit short SHA: ${shortSha}`);
     return null;
+  }
+
+  /**
+   * Lists the branches of a repository.
+   */
+  async getBranches(owner: string, repo: string): Promise<any[]> {
+    logger.info(`GitHubService: Fetching branches for ${owner}/${repo}...`);
+    try {
+      return await this.fetchWithAuth(`https://api.github.com/repos/${owner}/${repo}/branches`);
+    } catch (e) {
+      logger.warn(`Failed to fetch branches: ${e}`);
+      return [];
+    }
+  }
+
+  /**
+   * Performs direct merge of a head branch into a base branch quietly.
+   */
+  async mergeBranch(owner: string, repo: string, base: string, head: string): Promise<any> {
+    logger.info(`GitHubService: Merging head branch "${head}" into base branch "${base}" quietly...`);
+    return this.fetchWithAuth(`https://api.github.com/repos/${owner}/${repo}/merges`, {
+      method: 'POST',
+      body: JSON.stringify({
+        base,
+        head,
+        commit_message: `Direct merge of Jules branch "${head}" quietly`,
+      }),
+    });
+  }
+
+  /**
+   * Deletes a branch reference from the repository.
+   */
+  async deleteBranch(owner: string, repo: string, branch: string): Promise<any> {
+    logger.info(`GitHubService: Deleting branch reference "${branch}" quietly...`);
+    return this.fetchWithAuth(`https://api.github.com/repos/${owner}/${repo}/git/refs/heads/${encodeURIComponent(branch)}`, {
+      method: 'DELETE',
+    });
   }
 }
