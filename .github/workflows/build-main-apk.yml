@@ -3,8 +3,7 @@ name: Build Android APK Release
 on:
   push:
     branches:
-      - main
-      - jules-*
+      - jules-app-maker-*
   workflow_dispatch:
 
 jobs:
