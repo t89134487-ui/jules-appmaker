@@ -317,6 +317,22 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       );
     }
 
+    if (act.sessionCompleted) {
+      return (
+        <View key={act.id} style={styles.completedCardInline}>
+          <Text style={styles.completedTitleInline}>🏆 Task Complete!</Text>
+          <Text style={styles.completedDescInline}>
+            {act.description || 'Jules has successfully generated the code and completed the tasks.'}
+          </Text>
+          {onViewBuildProgress && (
+            <TouchableOpacity style={styles.chatBuildBtnInline} onPress={onViewBuildProgress}>
+              <Text style={styles.chatBuildBtnTextInline}>🚀 View APK Build Progress</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      );
+    }
+
     if (act.sessionFailed) {
       return (
         <View key={act.id} style={styles.failedCard}>
