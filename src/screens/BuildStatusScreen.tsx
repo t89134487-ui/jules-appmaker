@@ -35,28 +35,32 @@ export const BuildStatusScreen: React.FC<BuildStatusScreenProps> = ({
 
   const fetchStatus = async () => {
     let targetCommitSha = null;
-    let actionRuns = [];
+    const branchName = defaultBranch || 'main';
 
     try {
-      // 1. Get Action workflow runs
+      // 1. Query the default branch's latest commit SHA (the merge commit) first!
+      targetCommitSha = await githubService.getLatestCommitSha(repoOwner, repoName, branchName);
+      setCurrentCommitSha(targetCommitSha);
+    } catch (e) {
+      console.warn('Failed to query latest commit SHA', e);
+    }
+
+    let actionRuns = [];
+    try {
+      // 2. Get Action workflow runs
       actionRuns = await githubService.getWorkflowRuns(repoOwner, repoName);
       setRuns(actionRuns);
-      if (actionRuns && actionRuns.length > 0 && actionRuns[0].head_sha) {
+
+      // If we couldn't get the latest commit SHA, fall back to the head_sha of the latest workflow run
+      if (!targetCommitSha && actionRuns && actionRuns.length > 0 && actionRuns[0].head_sha) {
         targetCommitSha = actionRuns[0].head_sha;
+        setCurrentCommitSha(targetCommitSha);
       }
     } catch (e) {
       console.warn('Failed to query workflow runs', e);
     }
 
     try {
-      // 2. If no workflow run yet, fallback to latest commit of default branch
-      if (!targetCommitSha) {
-        const branchName = defaultBranch || 'main';
-        targetCommitSha = await githubService.getLatestCommitSha(repoOwner, repoName, branchName);
-      }
-
-      setCurrentCommitSha(targetCommitSha);
-
       if (targetCommitSha) {
         // 3. Try to locate released APK asset specifically for this target commit
         const shortSha = targetCommitSha.substring(0, 7);
@@ -64,7 +68,7 @@ export const BuildStatusScreen: React.FC<BuildStatusScreenProps> = ({
         setApkAsset(apk);
       }
     } catch (e) {
-      console.warn('Failed to query commit/release status', e);
+      console.warn('Failed to query release status', e);
       setApkAsset(null);
     }
   };
@@ -95,6 +99,10 @@ export const BuildStatusScreen: React.FC<BuildStatusScreenProps> = ({
   };
 
   const latestRun = runs[0];
+  const isWorkflowRunPending =
+    !!(currentCommitSha &&
+    latestRun &&
+    latestRun.head_sha !== currentCommitSha);
 
   return (
     <View style={styles.container}>
@@ -113,7 +121,7 @@ export const BuildStatusScreen: React.FC<BuildStatusScreenProps> = ({
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>🛠️ GitHub Actions CI Status</Text>
 
-          {latestRun ? (
+          {latestRun && !isWorkflowRunPending ? (
             <View style={styles.runDetail}>
               <View style={styles.statusRow}>
                 <View
@@ -137,6 +145,16 @@ export const BuildStatusScreen: React.FC<BuildStatusScreenProps> = ({
               >
                 <Text style={styles.detailsBtnText}>View GitHub Actions Logs ↗</Text>
               </TouchableOpacity>
+            </View>
+          ) : isWorkflowRunPending ? (
+            <View style={styles.noRuns}>
+              <ActivityIndicator color="#f59e0b" size="small" />
+              <Text style={[styles.noRunsText, { color: '#f59e0b', fontWeight: 'bold' }]}>
+                Pipeline Build Pending...
+              </Text>
+              <Text style={styles.noRunsSubtext}>
+                Waiting for GitHub Actions to trigger the pipeline for the latest merge commit: {currentCommitSha?.substring(0, 7)}
+              </Text>
             </View>
           ) : (
             <View style={styles.noRuns}>
@@ -283,6 +301,14 @@ const styles = StyleSheet.create({
     fontSize: 13,
     textAlign: 'center',
     marginTop: 12,
+  },
+  noRunsSubtext: {
+    color: '#71717a',
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: 6,
+    lineHeight: 18,
+    paddingHorizontal: 12,
   },
   apkSection: {
     flex: 1,
