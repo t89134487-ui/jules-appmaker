@@ -34,23 +34,32 @@ export const BuildStatusScreen: React.FC<BuildStatusScreenProps> = ({
   const [loading, setLoading] = useState(false);
 
   const fetchStatus = async () => {
+    let targetCommitSha = null;
+    let actionRuns = [];
+
     try {
       // 1. Get Action workflow runs
-      const actionRuns = await githubService.getWorkflowRuns(repoOwner, repoName);
+      actionRuns = await githubService.getWorkflowRuns(repoOwner, repoName);
       setRuns(actionRuns);
+      if (actionRuns && actionRuns.length > 0 && actionRuns[0].head_sha) {
+        targetCommitSha = actionRuns[0].head_sha;
+      }
     } catch (e) {
       console.warn('Failed to query workflow runs', e);
     }
 
     try {
-      // 2. Get the latest commit SHA of the default branch
-      const branchName = defaultBranch || 'main';
-      const commitSha = await githubService.getLatestCommitSha(repoOwner, repoName, branchName);
-      setCurrentCommitSha(commitSha);
+      // 2. If no workflow run yet, fallback to latest commit of default branch
+      if (!targetCommitSha) {
+        const branchName = defaultBranch || 'main';
+        targetCommitSha = await githubService.getLatestCommitSha(repoOwner, repoName, branchName);
+      }
 
-      if (commitSha) {
-        // 3. Try to locate released APK asset specifically for this commit
-        const shortSha = commitSha.substring(0, 7);
+      setCurrentCommitSha(targetCommitSha);
+
+      if (targetCommitSha) {
+        // 3. Try to locate released APK asset specifically for this target commit
+        const shortSha = targetCommitSha.substring(0, 7);
         const apk = await githubService.getApkAssetForCommit(repoOwner, repoName, shortSha);
         setApkAsset(apk);
       }
@@ -126,6 +135,9 @@ export const BuildStatusScreen: React.FC<BuildStatusScreenProps> = ({
                 </Text>
               </View>
               <Text style={styles.runTime}>Triggered: {new Date(latestRun.created_at).toLocaleString()}</Text>
+              {latestRun.head_sha ? (
+                <Text style={styles.runCommit}>Commit: {latestRun.head_sha.substring(0, 7)}</Text>
+              ) : null}
               <TouchableOpacity
                 onPress={() => Linking.openURL(latestRun.html_url)}
                 style={styles.detailsBtn}
@@ -363,6 +375,12 @@ const styles = StyleSheet.create({
     color: '#a0a0ab',
     fontSize: 12,
     marginTop: 16,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+  },
+  runCommit: {
+    color: '#a0a0ab',
+    fontSize: 12,
+    marginBottom: 16,
     fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
   },
 });

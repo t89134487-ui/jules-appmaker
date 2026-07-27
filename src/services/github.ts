@@ -17,6 +17,8 @@ export interface GitHubWorkflowRun {
   conclusion: string | null;
   html_url: string;
   created_at: string;
+  head_sha?: string;
+  head_branch?: string;
 }
 
 export interface GitHubReleaseAsset {
