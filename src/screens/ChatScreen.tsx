@@ -311,7 +311,10 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   // If no session active, show creation panel
   if (!session) {
     return (
-      <View style={styles.container}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.container}
+      >
         <View style={styles.header}>
           <TouchableOpacity onPress={onBack}>
             <Text style={styles.backText}>← Repos</Text>
@@ -320,7 +323,10 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
           <View style={{ width: 40 }} />
         </View>
 
-        <ScrollView contentContainerStyle={styles.centerContainer}>
+        <ScrollView
+          contentContainerStyle={styles.centerContainer}
+          keyboardShouldPersistTaps="handled"
+        >
           <Text style={styles.scaffoldTitle}>🚀 Launch Autonomous Dev</Text>
           <Text style={styles.scaffoldDesc}>
             Tell Jules what app you want to build. Jules will design the code, create the app boilerplate, and build a test-signed APK with GitHub Actions CI.
@@ -344,7 +350,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
             )}
           </TouchableOpacity>
         </ScrollView>
-      </View>
+      </KeyboardAvoidingView>
     );
   }
 

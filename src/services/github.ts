@@ -160,4 +160,46 @@ export class GitHubService {
       }),
     });
   }
+
+  /**
+   * Fetches the latest commit SHA of the specified branch.
+   */
+  async getLatestCommitSha(owner: string, repo: string, branch: string): Promise<string> {
+    logger.info(`GitHubService: Fetching latest commit SHA for branch ${branch} in ${owner}/${repo}...`);
+    const commits = await this.fetchWithAuth(
+      `https://api.github.com/repos/${owner}/${repo}/commits?sha=${encodeURIComponent(branch)}&per_page=1`
+    );
+    if (commits && commits.length > 0) {
+      return commits[0].sha;
+    }
+    throw new Error('No commits found on branch ' + branch);
+  }
+
+  /**
+   * Searches for release assets with .apk extension in releases matching the short commit SHA.
+   */
+  async getApkAssetForCommit(owner: string, repo: string, shortSha: string): Promise<GitHubReleaseAsset | null> {
+    logger.info(`GitHubService: Searching for APK asset matching commit short SHA: ${shortSha} in ${owner}/${repo}...`);
+    const releases = await this.getReleases(owner, repo);
+    if (!releases || releases.length === 0) {
+      logger.info('GitHubService: No releases found.');
+      return null;
+    }
+
+    for (const release of releases) {
+      // Check if release tag name contains the short SHA (case-insensitive search)
+      if (release.tag_name.toLowerCase().includes(shortSha.toLowerCase())) {
+        logger.info(`GitHubService: Found matching release: ${release.tag_name}`);
+        const apkAsset = release.assets.find(
+          (asset) => asset.name.endsWith('.apk') || asset.content_type === 'application/vnd.android.package-archive'
+        );
+        if (apkAsset) {
+          logger.info(`GitHubService: Found APK asset: ${apkAsset.name}`);
+          return apkAsset;
+        }
+      }
+    }
+    logger.info(`GitHubService: No matching APK release asset found for commit short SHA: ${shortSha}`);
+    return null;
+  }
 }
