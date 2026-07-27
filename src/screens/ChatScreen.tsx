@@ -47,8 +47,24 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   const [message, setMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [mergedBranches, setMergedBranches] = useState<Record<string, boolean>>({});
-  const [mergeStatus, setMergeStatus] = useState<string | null>(null);
+  interface LocalMergeStatus {
+    id: string;
+    text: string;
+    createTime: string;
+  }
+  const [localMergeStatuses, setLocalMergeStatuses] = useState<LocalMergeStatus[]>([]);
   const [hasAttemptedMerge, setHasAttemptedMerge] = useState(false);
+
+  const addMergeStatus = (status: string) => {
+    setLocalMergeStatuses((prev) => [
+      ...prev,
+      {
+        id: `local-merge-${Math.random()}-${Date.now()}`,
+        text: status,
+        createTime: new Date().toISOString(),
+      },
+    ]);
+  };
 
   // Initial prompt state
   const [initialPrompt, setInitialPrompt] = useState('');
@@ -71,7 +87,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
         setHasAttemptedMerge(true);
         try {
           logger.info('ChatScreen: Fetching repo branches to perform direct quiet merge...');
-          setMergeStatus('Checking repository branches to integrate code...');
+          addMergeStatus('Checking repository branches to integrate code...');
           const branches = await gitHubService.getBranches(selectedRepo.owner.login, selectedRepo.name);
 
           let matchedAnyBranch = false;
@@ -83,7 +99,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
               matchedAnyBranch = true;
               if (!mergedBranches[branchName]) {
                 logger.info(`ChatScreen: Detected completed session branch "${branchName}". Triggering PR creation & rebase merge...`);
-                setMergeStatus(`Integrating development branch "${branchName}" via rebase...`);
+                addMergeStatus(`Integrating development branch "${branchName}" via rebase...`);
 
                 // Immediately mark as merged locally to prevent concurrent/duplicate API requests
                 setMergedBranches((prev) => ({ ...prev, [branchName]: true }));
@@ -95,7 +111,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
 
                   if (!pr) {
                     logger.info(`ChatScreen: No open PR found for branch "${branchName}". Creating new PR...`);
-                    setMergeStatus(`Creating integration Pull Request for "${branchName}"...`);
+                    addMergeStatus(`Creating integration Pull Request for "${branchName}"...`);
                     pr = await gitHubService.createPullRequest(
                       selectedRepo.owner.login,
                       selectedRepo.name,
@@ -107,7 +123,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
 
                   const prNumber = pr.number;
                   logger.info(`ChatScreen: Merging PR #${prNumber} via rebase...`);
-                  setMergeStatus(`Performing fast-forward rebase merge for PR #${prNumber}...`);
+                  addMergeStatus(`Performing fast-forward rebase merge for PR #${prNumber}...`);
 
                   const mergeResult = await gitHubService.mergePullRequest(
                     selectedRepo.owner.login,
@@ -116,7 +132,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                     'rebase'
                   );
                   logger.info(`ChatScreen: PR #${prNumber} merged successfully via rebase: ${JSON.stringify(mergeResult)}`);
-                  setMergeStatus(`Rebase merge complete! Cleaning up development branch "${branchName}"...`);
+                  addMergeStatus(`Rebase merge complete! Cleaning up development branch "${branchName}"...`);
 
                   // Delete the branch quietly to clean up references
                   try {
@@ -126,24 +142,24 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                       branchName
                     );
                     logger.info(`ChatScreen: Branch "${branchName}" deleted successfully quietly.`);
-                    setMergeStatus(`Integrated "${branchName}" successfully via rebase and cleaned up branch.`);
+                    addMergeStatus(`Integrated "${branchName}" successfully via rebase and cleaned up branch.`);
                   } catch (deleteErr: any) {
                     logger.warn(`ChatScreen: Quiet branch deletion failed for "${branchName}": ${deleteErr.message}`);
-                    setMergeStatus(`Integrated "${branchName}" successfully via rebase (cleanup skipped).`);
+                    addMergeStatus(`Integrated "${branchName}" successfully via rebase (cleanup skipped).`);
                   }
                 } catch (mergeErr: any) {
                   logger.error(`ChatScreen: Rebase merge failed for branch "${branchName}": ${mergeErr.message}`);
-                  setMergeStatus(`Failed to integrate branch: ${mergeErr.message}`);
+                  addMergeStatus(`Failed to integrate branch: ${mergeErr.message}`);
                 }
               }
             }
           }
           if (!matchedAnyBranch) {
-            setMergeStatus('Code changes are already integrated into the default branch.');
+            addMergeStatus('Code changes are already integrated into the default branch.');
           }
         } catch (e: any) {
           logger.warn(`ChatScreen: Failed to list/merge branches: ${e.message}`);
-          setMergeStatus(`Branch integration lookup failed: ${e.message}`);
+          addMergeStatus(`Branch integration lookup failed: ${e.message}`);
         }
       }
     } catch (e: any) {
@@ -156,7 +172,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     if (initialSessionId) {
       logger.info(`Resuming existing session thread: ${initialSessionId}`);
       setLoading(true);
-      setMergeStatus(null);
+      setLocalMergeStatuses([]);
       setHasAttemptedMerge(false);
       fetchSessionState(initialSessionId)
         .then(() => {
@@ -168,7 +184,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     } else {
       setSession(null);
       setActivities([]);
-      setMergeStatus(null);
+      setLocalMergeStatuses([]);
       setHasAttemptedMerge(false);
     }
   }, [initialSessionId]);
@@ -228,7 +244,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       });
 
       logger.info(`Session created successfully. ID: ${newSession.id}. State: ${newSession.state}`);
-      setMergeStatus(null);
+      setLocalMergeStatuses([]);
       setHasAttemptedMerge(false);
       setSession(newSession);
       onSessionStarted(newSession.id);
@@ -358,6 +374,19 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     return null;
   };
 
+  // Combined chronological feed of API activities and local merge statuses
+  const combinedFeed = [
+    ...activities.map(act => ({ ...act, isLocalMergeStatus: false })),
+    ...localMergeStatuses.map(status => ({
+      id: status.id,
+      isLocalMergeStatus: true,
+      description: status.text,
+      createTime: status.createTime,
+    }))
+  ].sort((a, b) => new Date(a.createTime).getTime() - new Date(b.createTime).getTime());
+
+  const lastLocalMergeIdx = combinedFeed.map(item => !!item.isLocalMergeStatus).lastIndexOf(true);
+
   // If no session active, show creation panel
   if (!session) {
     return (
@@ -437,19 +466,24 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
           </Text>
         </View>
 
-        {activities.map(renderActivityItem)}
-
-        {mergeStatus && (
-          <View style={styles.mergeStatusCard}>
-            <Text style={styles.mergeStatusTitle}>⚙️ Integration Status</Text>
-            <Text style={styles.mergeStatusDesc}>{mergeStatus}</Text>
-            {onViewBuildProgress && (
-              <TouchableOpacity style={[styles.chatBuildBtn, { marginTop: 12 }]} onPress={onViewBuildProgress}>
-                <Text style={styles.chatBuildBtnText}>🚀 View APK Build Progress</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        )}
+        {combinedFeed.map((item, idx) => {
+          if (item.isLocalMergeStatus) {
+            const isLastLocalMerge = idx === lastLocalMergeIdx;
+            return (
+              <View key={item.id} style={styles.mergeStatusCard}>
+                <Text style={styles.mergeStatusTitle}>⚙️ Integration Status</Text>
+                <Text style={styles.mergeStatusDesc}>{item.description}</Text>
+                {isLastLocalMerge && onViewBuildProgress && (
+                  <TouchableOpacity style={[styles.chatBuildBtn, { marginTop: 12 }]} onPress={onViewBuildProgress}>
+                    <Text style={styles.chatBuildBtnText}>🚀 View APK Build Progress</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            );
+          } else {
+            return renderActivityItem(item as unknown as JulesActivity);
+          }
+        })}
       </ScrollView>
 
       {/* Input bar */}
