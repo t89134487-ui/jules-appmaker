@@ -21,6 +21,7 @@ export default function App() {
   const [julesApiKey, setJulesApiKey] = useState<string>('');
   const [selectedRepo, setSelectedRepo] = useState<GitHubRepo | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [hasExistingSessions, setHasExistingSessions] = useState<boolean>(false);
 
   // Restore credentials on boot
   useEffect(() => {
@@ -80,13 +81,14 @@ export default function App() {
     }
   };
 
-  const handleSelectRepo = (repo: GitHubRepo, sessionId?: string) => {
+  const handleSelectRepo = (repo: GitHubRepo, sessionId?: string, existing?: boolean) => {
     setSelectedRepo(repo);
     if (sessionId) {
       setActiveSessionId(sessionId);
     } else {
       setActiveSessionId(null);
     }
+    setHasExistingSessions(!!existing);
     setCurrentScreen('CHAT');
   };
 
@@ -139,6 +141,7 @@ export default function App() {
               gitHubService={githubService}
               selectedRepo={selectedRepo}
               initialSessionId={activeSessionId}
+              hasExistingSessions={hasExistingSessions}
               onSessionStarted={(id) => setActiveSessionId(id)}
               onSessionStateFetched={(state) => setActiveSessionState(state)}
               onViewBuildProgress={() => setCurrentScreen('BUILD_STATUS')}
