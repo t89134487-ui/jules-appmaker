@@ -10,7 +10,6 @@ import {
   Modal,
   Alert,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ClipboardExpo from 'expo-clipboard';
 import { GitHubRepo, GitHubService } from '../services/github';
 import { JulesService, JulesSource } from '../services/jules';

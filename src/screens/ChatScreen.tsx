@@ -292,20 +292,6 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       );
     }
 
-    if (act.sessionCompleted) {
-      return (
-        <View key={act.id} style={styles.completedCard}>
-          <Text style={styles.completedTitle}>🏆 Task Complete!</Text>
-          <Text style={styles.completedDesc}>Jules has successfully generated the code and merged it directly into your branch.</Text>
-          {onViewBuildProgress && (
-            <TouchableOpacity style={styles.chatBuildBtn} onPress={onViewBuildProgress}>
-              <Text style={styles.chatBuildBtnText}>🚀 View APK Build Progress</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      );
-    }
-
     if (act.sessionFailed) {
       return (
         <View key={act.id} style={styles.failedCard}>
@@ -409,6 +395,18 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
         </View>
 
         {activities.map(renderActivityItem)}
+
+        {session.state === 'COMPLETED' && (
+          <View style={styles.completedCard}>
+            <Text style={styles.completedTitle}>🏆 Task Complete!</Text>
+            <Text style={styles.completedDesc}>Jules has successfully generated the code and merged it directly into your branch.</Text>
+            {onViewBuildProgress && (
+              <TouchableOpacity style={styles.chatBuildBtn} onPress={onViewBuildProgress}>
+                <Text style={styles.chatBuildBtnText}>🚀 View APK Build Progress</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
       </ScrollView>
 
       {/* Input bar */}
