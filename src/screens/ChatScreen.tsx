@@ -12,6 +12,7 @@ import {
   Platform,
   Alert,
   Linking,
+  Modal,
 } from 'react-native';
 import * as ClipboardExpo from 'expo-clipboard';
 import { JulesService, JulesSession, JulesActivity } from '../services/jules';
@@ -50,6 +51,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   const [submitting, setSubmitting] = useState(false);
   const [mergedBranches, setMergedBranches] = useState<Record<string, boolean>>({});
   const [isMerging, setIsMerging] = useState(false);
+  const [failedMessages, setFailedMessages] = useState<Array<{ id: string; text: string; createTime: string }>>([]);
+  const [jsonModalVisible, setJsonModalVisible] = useState(false);
   interface LocalMergeStatus {
     id: string;
     text: string;
@@ -336,6 +339,39 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
         if (session) fetchSessionState(session.id);
       }, 5000);
     } catch (e: any) {
+      const failedId = `failed-msg-${Math.random()}-${Date.now()}`;
+      setFailedMessages((prev) => [
+        ...prev,
+        { id: failedId, text: textToSend, createTime: new Date().toISOString() },
+      ]);
+      Alert.alert('Error Sending Message', e.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleRetryMessage = async (failedId: string, text: string) => {
+    if (!session) return;
+    setSubmitting(true);
+    setFailedMessages((prev) => prev.filter((m) => m.id !== failedId));
+    try {
+      await julesService.sendMessage(session.id, text);
+
+      // Fetch immediately to display user message in the activities list
+      await fetchSessionState(session.id);
+
+      // Schedule subsequent fetches to catch state transition on Jules server
+      setTimeout(() => {
+        if (session) fetchSessionState(session.id);
+      }, 2000);
+      setTimeout(() => {
+        if (session) fetchSessionState(session.id);
+      }, 5000);
+    } catch (e: any) {
+      setFailedMessages((prev) => [
+        ...prev,
+        { id: failedId, text, createTime: new Date().toISOString() },
+      ]);
       Alert.alert('Error Sending Message', e.message);
     } finally {
       setSubmitting(false);
@@ -478,19 +514,33 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   // Combined chronological feed of API activities and local merge statuses
   // We use index preservation to prevent Hermes/JSC unstable sorting from scrambling the feed.
   const combinedFeed = [
-    ...activities.map((act, idx) => ({ ...act, originalIdx: idx, isLocalMergeStatus: false })),
+    ...activities.map((act, idx) => ({ ...act, originalIdx: idx, isLocalMergeStatus: false, isFailedMessage: false, failedText: undefined as string | undefined })),
     ...localMergeStatuses.map(status => ({
       id: status.id,
       originalIdx: 999999,
       isLocalMergeStatus: true,
       description: status.text,
       createTime: status.createTime,
+      isFailedMessage: false,
+      failedText: undefined as string | undefined,
+    })),
+    ...failedMessages.map(failed => ({
+      id: failed.id,
+      originalIdx: 999999,
+      isLocalMergeStatus: false,
+      isFailedMessage: true,
+      description: '',
+      failedText: failed.text as string | undefined,
+      createTime: failed.createTime,
     }))
   ].sort((a, b) => {
-    if (a.isLocalMergeStatus && b.isLocalMergeStatus) {
+    const isTemporalA = a.isLocalMergeStatus || a.isFailedMessage;
+    const isTemporalB = b.isLocalMergeStatus || b.isFailedMessage;
+
+    if (isTemporalA && isTemporalB) {
       return new Date(a.createTime).getTime() - new Date(b.createTime).getTime();
     }
-    if (a.isLocalMergeStatus || b.isLocalMergeStatus) {
+    if (isTemporalA || isTemporalB) {
       const timeA = new Date(a.createTime).getTime();
       const timeB = new Date(b.createTime).getTime();
       if (timeA !== timeB) {
@@ -498,7 +548,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       }
     }
     return (a.originalIdx || 0) - (b.originalIdx || 0);
-  });
+  }).slice(-50); // ONLY show the last fifty items!
 
   const lastLocalMergeIdx = combinedFeed.map(item => !!item.isLocalMergeStatus).lastIndexOf(true);
 
@@ -565,7 +615,9 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
             <Text style={styles.statusLabel}>{session.state}</Text>
           </View>
         </View>
-        <View style={{ width: 60 }} />
+        <TouchableOpacity style={styles.jsonHeaderBtn} onPress={() => setJsonModalVisible(true)}>
+          <Text style={styles.jsonHeaderBtnText}>API JSON</Text>
+        </TouchableOpacity>
       </View>
 
       {/* Chat Area */}
@@ -582,6 +634,23 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
         </View>
 
         {combinedFeed.map((item, idx) => {
+          if (item.isFailedMessage) {
+            return (
+              <View key={item.id} style={[styles.msgRow, styles.msgUser, styles.msgFailedBorder]}>
+                <View style={styles.msgFailedRow}>
+                  <Text selectable style={[styles.msgLabel, { color: '#ef4444' }]}>Failed to Send</Text>
+                  <TouchableOpacity
+                    style={styles.retryBtn}
+                    onPress={() => handleRetryMessage(item.id, item.failedText || '')}
+                  >
+                    <Text style={styles.retryBtnText}>🔄 Retry</Text>
+                  </TouchableOpacity>
+                </View>
+                <Text selectable style={styles.msgText}>{item.failedText}</Text>
+              </View>
+            );
+          }
+
           if (item.isLocalMergeStatus) {
             const isLastLocalMerge = idx === lastLocalMergeIdx;
 
@@ -702,6 +771,54 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
           {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.sendBtnText}>Send</Text>}
         </TouchableOpacity>
       </View>
+
+      {/* Modal to view Raw Jules Session/Activities JSON */}
+      <Modal
+        visible={jsonModalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setJsonModalVisible(false)}
+      >
+        <View style={styles.jsonOverlay}>
+          <View style={styles.jsonContainer}>
+            <View style={styles.jsonHeader}>
+              <Text style={styles.jsonTitle}>🛠️ Jules API Response Payload</Text>
+              <TouchableOpacity style={styles.closeJsonBtn} onPress={() => setJsonModalVisible(false)}>
+                <Text style={styles.closeJsonBtnText}>✕ Close</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.jsonScroll}>
+              <Text style={styles.sectionTitleHeader}>Session Object:</Text>
+              <Text selectable style={styles.jsonTextCode}>
+                {JSON.stringify(session, null, 2)}
+              </Text>
+
+              <Text style={[styles.sectionTitleHeader, { marginTop: 20 }]}>Activities ({activities.length}):</Text>
+              <Text selectable style={styles.jsonTextCode}>
+                {JSON.stringify(activities, null, 2)}
+              </Text>
+            </ScrollView>
+
+            <View style={styles.jsonFooter}>
+              <TouchableOpacity
+                style={styles.copyJsonBtn}
+                onPress={async () => {
+                  try {
+                    const fullPayload = JSON.stringify({ session, activities }, null, 2);
+                    await ClipboardExpo.setStringAsync(fullPayload);
+                    Alert.alert('Success', 'Jules API payload copied to clipboard!');
+                  } catch (e: any) {
+                    Alert.alert('Copy Failed', e.message);
+                  }
+                }}
+              >
+                <Text style={styles.copyJsonBtnText}>Copy Raw Payload</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 };
@@ -878,6 +995,27 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 15,
     lineHeight: 20,
+  },
+  msgFailedBorder: {
+    borderColor: '#ef4444',
+    borderWidth: 1,
+  },
+  msgFailedRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  retryBtn: {
+    backgroundColor: '#ef4444',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  retryBtnText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
   },
   planCard: {
     backgroundColor: '#1c1c1f',
@@ -1175,5 +1313,93 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: 'bold',
     fontSize: 13,
+  },
+  jsonHeaderBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    backgroundColor: '#1c1c1f',
+    borderColor: '#2e2e33',
+    borderWidth: 1,
+    borderRadius: 6,
+  },
+  jsonHeaderBtnText: {
+    color: '#3b82f6',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  jsonOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.85)',
+    justifyContent: 'flex-end',
+  },
+  jsonContainer: {
+    backgroundColor: '#09090b',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    height: '80%',
+    paddingBottom: 24,
+    borderTopWidth: 2,
+    borderColor: '#27272a',
+  },
+  jsonHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderColor: '#27272a',
+  },
+  jsonTitle: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: 'bold',
+  },
+  closeJsonBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    backgroundColor: '#27272a',
+    borderRadius: 6,
+  },
+  closeJsonBtnText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: 'bold',
+  },
+  jsonScroll: {
+    padding: 16,
+  },
+  sectionTitleHeader: {
+    color: '#c084fc',
+    fontSize: 14,
+    fontWeight: 'bold',
+    marginBottom: 8,
+  },
+  jsonTextCode: {
+    color: '#a1a1aa',
+    fontSize: 11,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    backgroundColor: '#18181b',
+    padding: 10,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#27272a',
+  },
+  jsonFooter: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderColor: '#27272a',
+    alignItems: 'flex-end',
+  },
+  copyJsonBtn: {
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    backgroundColor: '#3b82f6',
+    borderRadius: 8,
+  },
+  copyJsonBtnText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 14,
   },
 });
