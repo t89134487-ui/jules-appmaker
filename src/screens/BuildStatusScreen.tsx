@@ -9,37 +9,59 @@ import {
   ScrollView,
   Alert,
   Platform,
+  FlatList,
 } from 'react-native';
 import * as ClipboardExpo from 'expo-clipboard';
-import { GitHubService, GitHubWorkflowRun, GitHubReleaseAsset } from '../services/github';
+import { GitHubService, GitHubWorkflowRun, GitHubReleaseAsset, GitHubRepo } from '../services/github';
 
 interface BuildStatusScreenProps {
   githubService: GitHubService;
-  repoOwner: string;
-  repoName: string;
-  defaultBranch?: string;
   onBack: () => void;
 }
 
 export const BuildStatusScreen: React.FC<BuildStatusScreenProps> = ({
   githubService,
-  repoOwner,
-  repoName,
-  defaultBranch,
   onBack,
 }) => {
+  const [repos, setRepos] = useState<GitHubRepo[]>([]);
+  const [selectedRepo, setSelectedRepo] = useState<GitHubRepo | null>(null);
+  const [loadingRepos, setLoadingRepos] = useState(false);
+
   const [runs, setRuns] = useState<GitHubWorkflowRun[]>([]);
   const [apkAsset, setApkAsset] = useState<GitHubReleaseAsset | null>(null);
   const [currentCommitSha, setCurrentCommitSha] = useState<string | null>(null);
-  const [polling, setPolling] = useState(true);
-  const [loading, setLoading] = useState(false);
+  const [loadingBuildInfo, setLoadingBuildInfo] = useState(false);
 
-  const fetchStatus = async () => {
+  // Fetch list of repositories on mount
+  useEffect(() => {
+    const fetchRepos = async () => {
+      setLoadingRepos(true);
+      try {
+        const repoList = await githubService.getRepositories();
+        setRepos(repoList);
+        if (repoList.length > 0) {
+          // Select the first repo by default
+          setSelectedRepo(repoList[0]);
+        }
+      } catch (e: any) {
+        Alert.alert('Error Fetching Repositories', e.message);
+      } finally {
+        setLoadingRepos(false);
+      }
+    };
+    fetchRepos();
+  }, []);
+
+  // Fetch build status whenever selectedRepo changes
+  const fetchBuildStatus = async (repo: GitHubRepo) => {
+    setLoadingBuildInfo(true);
     let targetCommitSha = null;
-    const branchName = defaultBranch || 'main';
+    const repoOwner = repo.owner.login;
+    const repoName = repo.name;
+    const branchName = repo.default_branch || 'main';
 
     try {
-      // 1. Query the default branch's latest commit SHA (the merge commit) first!
+      // 1. Get latest commit SHA
       targetCommitSha = await githubService.getLatestCommitSha(repoOwner, repoName, branchName);
       setCurrentCommitSha(targetCommitSha);
     } catch (e) {
@@ -48,35 +70,41 @@ export const BuildStatusScreen: React.FC<BuildStatusScreenProps> = ({
 
     let actionRuns = [];
     try {
-      // 2. Get Action workflow runs
+      // 2. Get action runs
       actionRuns = await githubService.getWorkflowRuns(repoOwner, repoName);
       setRuns(actionRuns);
 
-      // If we couldn't get the latest commit SHA, fall back to the head_sha of the latest workflow run
       if (!targetCommitSha && actionRuns && actionRuns.length > 0 && actionRuns[0].head_sha) {
         targetCommitSha = actionRuns[0].head_sha;
         setCurrentCommitSha(targetCommitSha);
       }
     } catch (e) {
       console.warn('Failed to query workflow runs', e);
+      setRuns([]);
     }
 
     try {
       if (targetCommitSha) {
-        // 3. Try to locate released APK asset specifically for this target commit
+        // 3. Locate compiled APK release asset
         const shortSha = targetCommitSha.substring(0, 7);
         const apk = await githubService.getApkAssetForCommit(repoOwner, repoName, shortSha);
         setApkAsset(apk);
+      } else {
+        setApkAsset(null);
       }
     } catch (e) {
       console.warn('Failed to query release status', e);
       setApkAsset(null);
+    } finally {
+      setLoadingBuildInfo(false);
     }
   };
 
   useEffect(() => {
-    fetchStatus();
-  }, []);
+    if (selectedRepo) {
+      fetchBuildStatus(selectedRepo);
+    }
+  }, [selectedRepo]);
 
   const handleDownload = async () => {
     if (!apkAsset) return;
@@ -112,98 +140,148 @@ export const BuildStatusScreen: React.FC<BuildStatusScreenProps> = ({
         <TouchableOpacity onPress={onBack}>
           <Text style={styles.backText}>← Workspace</Text>
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Build CI Pipeline</Text>
-        <TouchableOpacity style={styles.refreshHeaderBtn} onPress={fetchStatus}>
+        <Text style={styles.headerTitle}>1-Click APK Downloads</Text>
+        <TouchableOpacity
+          style={styles.refreshHeaderBtn}
+          onPress={() => selectedRepo && fetchBuildStatus(selectedRepo)}
+          disabled={!selectedRepo || loadingBuildInfo}
+        >
           <Text style={styles.refreshHeaderText}>🔄 Refresh</Text>
         </TouchableOpacity>
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll}>
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>🛠️ GitHub Actions CI Status</Text>
-
-          {latestRun && !isWorkflowRunPending ? (
-            <View style={styles.runDetail}>
-              <View style={styles.statusRow}>
-                <View
-                  style={[
-                    styles.statusDot,
-                    { backgroundColor: getRunStatusColor(latestRun.status, latestRun.conclusion) },
-                  ]}
-                />
-                <Text style={styles.runStatus}>
-                  {latestRun.status.toUpperCase()}
-                  {latestRun.conclusion ? ` (${latestRun.conclusion.toUpperCase()})` : ''}
-                </Text>
-              </View>
-              <Text style={styles.runTime}>Triggered: {new Date(latestRun.created_at).toLocaleString()}</Text>
-              {latestRun.head_sha ? (
-                <Text style={styles.runCommit}>Commit: {latestRun.head_sha.substring(0, 7)}</Text>
-              ) : null}
-              <TouchableOpacity
-                onPress={() => Linking.openURL(latestRun.html_url)}
-                style={styles.detailsBtn}
-              >
-                <Text style={styles.detailsBtnText}>View GitHub Actions Logs ↗</Text>
-              </TouchableOpacity>
-            </View>
-          ) : isWorkflowRunPending ? (
-            <View style={styles.noRuns}>
-              <ActivityIndicator color="#f59e0b" size="small" />
-              <Text style={[styles.noRunsText, { color: '#f59e0b', fontWeight: 'bold' }]}>
-                Pipeline Build Pending...
-              </Text>
-              <Text style={styles.noRunsSubtext}>
-                Waiting for GitHub Actions to trigger the pipeline for the latest merge commit: {currentCommitSha?.substring(0, 7)}
-              </Text>
-            </View>
+        {/* Repo Selector Row */}
+        <View style={styles.selectorCard}>
+          <Text style={styles.selectorLabel}>📂 Select Repository:</Text>
+          {loadingRepos ? (
+            <ActivityIndicator color="#6200ee" style={{ marginVertical: 8 }} />
           ) : (
-            <View style={styles.noRuns}>
-              <ActivityIndicator color="#6200ee" size="small" />
-              <Text style={styles.noRunsText}>Waiting for Jules to setup and trigger CI pipeline...</Text>
-            </View>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.reposHorizontalList}>
+              {repos.map((repo) => {
+                const isSelected = selectedRepo?.id === repo.id;
+                return (
+                  <TouchableOpacity
+                    key={repo.id}
+                    style={[styles.repoTab, isSelected && styles.repoTabActive]}
+                    onPress={() => setSelectedRepo(repo)}
+                  >
+                    <Text style={[styles.repoTabText, isSelected && styles.repoTabTextActive]}>
+                      {repo.name}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
           )}
         </View>
 
-        {/* APK Download section */}
-        <View style={styles.apkSection}>
-          {apkAsset ? (
-            <View style={styles.apkCardReady}>
-              <Text style={styles.apkEmoji}>📦</Text>
-              <Text style={styles.apkTitle}>Android APK is Ready!</Text>
-              <Text style={styles.apkDesc}>
-                Jules successfully built and published a test-key signed production APK for one-click download.
-              </Text>
-              <TouchableOpacity style={styles.downloadBtn} onPress={handleDownload}>
-                <Text style={styles.downloadBtnText}>Install / Download APK</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.copyLinkBtn}
-                onPress={async () => {
-                  await ClipboardExpo.setStringAsync(apkAsset.browser_download_url);
-                  Alert.alert('Copied!', 'APK Download URL copied to clipboard.');
-                }}
-              >
-                <Text style={styles.copyLinkBtnText}>📋 Copy APK Download Link</Text>
-              </TouchableOpacity>
-              <Text style={styles.apkMeta}>{apkAsset.name}</Text>
-              {currentCommitSha ? (
-                <Text style={styles.commitText}>Commit: {currentCommitSha.substring(0, 7)}</Text>
-              ) : null}
+        {selectedRepo && (
+          <View style={styles.repoDetailsBanner}>
+            <Text style={styles.repoOwnerText}>
+              Owner: {selectedRepo.owner.login} | Branch: {selectedRepo.default_branch || 'main'}
+            </Text>
+          </View>
+        )}
+
+        {loadingBuildInfo ? (
+          <View style={styles.centerLoading}>
+            <ActivityIndicator size="large" color="#6200ee" />
+            <Text style={styles.loadingText}>Fetching CI & APK Build information...</Text>
+          </View>
+        ) : selectedRepo ? (
+          <View style={{ flex: 1 }}>
+            {/* APK Download section */}
+            <View style={styles.apkSection}>
+              {apkAsset ? (
+                <View style={styles.apkCardReady}>
+                  <Text style={styles.apkEmoji}>📦</Text>
+                  <Text style={styles.apkTitle}>Android APK is Ready!</Text>
+                  <Text style={styles.apkDesc}>
+                    Jules successfully built and published a signed standalone APK for one-click install.
+                  </Text>
+                  <TouchableOpacity style={styles.downloadBtn} onPress={handleDownload}>
+                    <Text style={styles.downloadBtnText}>Install / Download APK</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.copyLinkBtn}
+                    onPress={async () => {
+                      await ClipboardExpo.setStringAsync(apkAsset.browser_download_url);
+                      Alert.alert('Copied!', 'APK Download URL copied to clipboard.');
+                    }}
+                  >
+                    <Text style={styles.copyLinkBtnText}>📋 Copy APK Download Link</Text>
+                  </TouchableOpacity>
+                  <Text style={styles.apkMeta}>{apkAsset.name}</Text>
+                  {currentCommitSha ? (
+                    <Text style={styles.commitText}>Commit: {currentCommitSha.substring(0, 7)}</Text>
+                  ) : null}
+                </View>
+              ) : (
+                <View style={styles.apkCardPending}>
+                  <ActivityIndicator color="#f59e0b" size="large" />
+                  <Text style={styles.apkPendingTitle}>No Signed APK Found</Text>
+                  <Text style={styles.apkPendingDesc}>
+                    An APK build might be compiling or is pending code integration. The compilation typically takes 3 to 5 minutes once triggered by pushing changes.
+                  </Text>
+                  {currentCommitSha ? (
+                    <Text style={styles.commitTextPending}>Target Commit: {currentCommitSha.substring(0, 7)}</Text>
+                  ) : null}
+                </View>
+              )}
             </View>
-          ) : (
-            <View style={styles.apkCardPending}>
-              <ActivityIndicator color="#a0a0ab" size="large" />
-              <Text style={styles.apkPendingTitle}>Building APK...</Text>
-              <Text style={styles.apkPendingDesc}>
-                The CI build typically takes 3 to 5 minutes. As soon as the APK is compiled and released, it will appear right here for one-click install!
-              </Text>
-              {currentCommitSha ? (
-                <Text style={styles.commitTextPending}>Target Commit: {currentCommitSha.substring(0, 7)}</Text>
-              ) : null}
+
+            {/* GitHub Actions CI Status */}
+            <View style={styles.card}>
+              <Text style={styles.sectionTitle}>🛠️ GitHub Actions CI Status</Text>
+
+              {latestRun && !isWorkflowRunPending ? (
+                <View style={styles.runDetail}>
+                  <View style={styles.statusRow}>
+                    <View
+                      style={[
+                        styles.statusDot,
+                        { backgroundColor: getRunStatusColor(latestRun.status, latestRun.conclusion) },
+                      ]}
+                    />
+                    <Text style={styles.runStatus}>
+                      {latestRun.status.toUpperCase()}
+                      {latestRun.conclusion ? ` (${latestRun.conclusion.toUpperCase()})` : ''}
+                    </Text>
+                  </View>
+                  <Text style={styles.runTime}>Triggered: {new Date(latestRun.created_at).toLocaleString()}</Text>
+                  {latestRun.head_sha ? (
+                    <Text style={styles.runCommit}>Commit: {latestRun.head_sha.substring(0, 7)}</Text>
+                  ) : null}
+                  <TouchableOpacity
+                    onPress={() => Linking.openURL(latestRun.html_url)}
+                    style={styles.detailsBtn}
+                  >
+                    <Text style={styles.detailsBtnText}>View GitHub Actions Logs ↗</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : isWorkflowRunPending ? (
+                <View style={styles.noRuns}>
+                  <ActivityIndicator color="#f59e0b" size="small" />
+                  <Text style={[styles.noRunsText, { color: '#f59e0b', fontWeight: 'bold' }]}>
+                    Pipeline Build Pending...
+                  </Text>
+                  <Text style={styles.noRunsSubtext}>
+                    Waiting for GitHub Actions to trigger the pipeline for the latest commit: {currentCommitSha?.substring(0, 7)}
+                  </Text>
+                </View>
+              ) : (
+                <View style={styles.noRuns}>
+                  <Text style={styles.noRunsText}>No workflow run history found for this repository.</Text>
+                </View>
+              )}
             </View>
-          )}
-        </View>
+          </View>
+        ) : (
+          <View style={styles.centerLoading}>
+            <Text style={styles.loadingText}>No repositories found to inspect.</Text>
+          </View>
+        )}
       </ScrollView>
     </View>
   );
@@ -249,8 +327,56 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   scroll: {
-    padding: 24,
+    padding: 20,
     flexGrow: 1,
+  },
+  selectorCard: {
+    backgroundColor: '#1c1c1f',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#2e2e33',
+    marginBottom: 12,
+  },
+  selectorLabel: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#fff',
+    marginBottom: 10,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  reposHorizontalList: {
+    flexDirection: 'row',
+  },
+  repoTab: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    backgroundColor: '#121214',
+    borderWidth: 1,
+    borderColor: '#2e2e33',
+    marginRight: 8,
+  },
+  repoTabActive: {
+    backgroundColor: '#6200ee',
+    borderColor: '#6200ee',
+  },
+  repoTabText: {
+    color: '#a0a0ab',
+    fontSize: 13,
+    fontWeight: 'bold',
+  },
+  repoTabTextActive: {
+    color: '#fff',
+  },
+  repoDetailsBanner: {
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  repoOwnerText: {
+    color: '#71717a',
+    fontSize: 12,
   },
   card: {
     backgroundColor: '#1c1c1f',
@@ -261,7 +387,7 @@ const styles = StyleSheet.create({
     borderColor: '#2e2e33',
   },
   sectionTitle: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: 'bold',
     color: '#fff',
     marginBottom: 16,
@@ -304,13 +430,12 @@ const styles = StyleSheet.create({
   },
   noRuns: {
     alignItems: 'center',
-    paddingVertical: 20,
+    paddingVertical: 12,
   },
   noRunsText: {
     color: '#a0a0ab',
     fontSize: 13,
     textAlign: 'center',
-    marginTop: 12,
   },
   noRunsSubtext: {
     color: '#71717a',
@@ -321,8 +446,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   apkSection: {
-    flex: 1,
-    justifyContent: 'center',
+    marginBottom: 20,
   },
   apkCardReady: {
     backgroundColor: '#1c1c1f',
@@ -410,6 +534,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     textAlign: 'center',
     lineHeight: 18,
+    paddingHorizontal: 12,
   },
   commitText: {
     color: '#10b981',
@@ -428,5 +553,15 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginBottom: 16,
     fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+  },
+  centerLoading: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 48,
+  },
+  loadingText: {
+    color: '#a0a0ab',
+    fontSize: 14,
+    marginTop: 12,
   },
 });

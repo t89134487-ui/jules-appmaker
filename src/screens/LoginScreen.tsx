@@ -5,72 +5,30 @@ import {
   View,
   TextInput,
   TouchableOpacity,
-  ActivityIndicator,
-  Alert,
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  Alert,
 } from 'react-native';
-import * as WebBrowser from 'expo-web-browser';
-import * as AuthSession from 'expo-auth-session';
-import { CONFIG } from '../config';
-
-WebBrowser.maybeCompleteAuthSession();
 
 interface LoginScreenProps {
-  onSuccess: (githubToken: string) => void;
+  onSuccess: (githubToken: string, julesApiKey: string) => void;
 }
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({ onSuccess }) => {
   const [patToken, setPatToken] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [apiKey, setApiKey] = useState('');
 
-  // Construct GitHub OAuth details
-  const [request, response, promptAsync] = AuthSession.useAuthRequest(
-    {
-      clientId: CONFIG.GITHUB_CLIENT_ID,
-      scopes: ['repo', 'workflow', 'read:user'],
-      redirectUri: AuthSession.makeRedirectUri({
-        scheme: 'julesapp',
-        path: 'oauth',
-      }),
-    },
-    {
-      authorizationEndpoint: 'https://github.com/login/oauth/authorize',
-      tokenEndpoint: 'https://github.com/login/oauth/access_token',
-    }
-  );
-
-  React.useEffect(() => {
-    if (response?.type === 'success' && response.authentication?.accessToken) {
-      onSuccess(response.authentication.accessToken);
-    }
-  }, [response]);
-
-  const handleOAuthLogin = async () => {
-    if (CONFIG.GITHUB_CLIENT_ID === 'YOUR_GITHUB_CLIENT_ID_PLACEHOLDER') {
-      Alert.alert(
-        'OAuth Placeholder Detect',
-        'OAuth Client ID is set to placeholder values. Please use the Personal Access Token (PAT) login below to test or enter your GitHub credentials in src/config.ts.'
-      );
-      return;
-    }
-    setLoading(true);
-    try {
-      await promptAsync();
-    } catch (e: any) {
-      Alert.alert('Login Failed', e.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handlePatLogin = () => {
+  const handleLogin = () => {
     if (!patToken.trim()) {
-      Alert.alert('Error', 'Please enter a valid Personal Access Token');
+      Alert.alert('Error', 'Please enter your GitHub Personal Access Token (PAT)');
       return;
     }
-    onSuccess(patToken.trim());
+    if (!apiKey.trim()) {
+      Alert.alert('Error', 'Please enter your Google Jules API Key');
+      return;
+    }
+    onSuccess(patToken.trim(), apiKey.trim());
   };
 
   return (
@@ -78,40 +36,25 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onSuccess }) => {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={styles.container}
     >
-      <ScrollView contentContainerStyle={styles.scroll}>
+      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
         <View style={styles.header}>
           <Text style={styles.logo}>🤖 App Generator</Text>
-          <Text style={styles.subtitle}>Build fully functional Android apps autonomously using Google Jules</Text>
+          <Text style={styles.subtitle}>
+            Build standalone Android apps autonomously using Google Jules
+          </Text>
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Method 1: Sign in with GitHub</Text>
+          <Text style={styles.sectionTitle}>Set Up Credentials</Text>
           <Text style={styles.desc}>
-            Quickly authenticate using your GitHub account. Ensure your OAuth App is configured.
+            Enter your keys to connect Google Jules with your GitHub repositories. Keys are securely stored locally on your device.
           </Text>
 
-          <TouchableOpacity
-            style={styles.oauthButton}
-            onPress={handleOAuthLogin}
-            disabled={loading || !request}
-          >
-            {loading ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.oauthButtonText}>🐱 Continue with GitHub OAuth</Text>
-            )}
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Method 2: Use Personal Access Token (PAT)</Text>
-          <Text style={styles.desc}>
-            Paste a GitHub PAT with 'repo' and 'workflow' scopes enabled. Perfect for local development or testing!
-          </Text>
-
+          {/* GitHub Token Input */}
+          <Text style={styles.label}>1. GitHub Personal Access Token (PAT)</Text>
           <TextInput
             style={styles.input}
-            placeholder="ghp_xxxxxxxxxxxx"
+            placeholder="ghp_xxxxxxxxxxxxxxxxxxxxxxxx"
             placeholderTextColor="#888"
             secureTextEntry
             value={patToken}
@@ -119,9 +62,29 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onSuccess }) => {
             autoCapitalize="none"
             autoCorrect={false}
           />
+          <Text style={styles.hint}>
+            Requires 'repo' and 'workflow' scopes enabled.
+          </Text>
 
-          <TouchableOpacity style={styles.patButton} onPress={handlePatLogin}>
-            <Text style={styles.patButtonText}>Continue with Token</Text>
+          {/* Jules API Key Input */}
+          <Text style={styles.label}>2. Google Jules API Key</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Enter your Google Jules API Key..."
+            placeholderTextColor="#888"
+            secureTextEntry
+            value={apiKey}
+            onChangeText={setApiKey}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          <Text style={styles.hint}>
+            Obtain from jules.google.com/settings/api.
+          </Text>
+
+          {/* Submit Button */}
+          <TouchableOpacity style={styles.button} onPress={handleLogin}>
+            <Text style={styles.buttonText}>Save & Continue</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -141,7 +104,7 @@ const styles = StyleSheet.create({
   },
   header: {
     alignItems: 'center',
-    marginBottom: 40,
+    marginBottom: 32,
   },
   logo: {
     fontSize: 32,
@@ -158,13 +121,12 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: '#1c1c1f',
     borderRadius: 12,
-    padding: 20,
-    marginBottom: 20,
+    padding: 24,
     borderWidth: 1,
     borderColor: '#2e2e33',
   },
   sectionTitle: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: 'bold',
     color: '#fff',
     marginBottom: 8,
@@ -173,21 +135,15 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#a0a0ab',
     lineHeight: 20,
-    marginBottom: 16,
+    marginBottom: 24,
   },
-  oauthButton: {
-    backgroundColor: '#24292e',
-    borderRadius: 8,
-    height: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#444',
-  },
-  oauthButtonText: {
-    color: '#fff',
-    fontSize: 16,
+  label: {
+    fontSize: 14,
     fontWeight: 'bold',
+    color: '#fff',
+    marginBottom: 8,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
   input: {
     backgroundColor: '#121214',
@@ -198,16 +154,23 @@ const styles = StyleSheet.create({
     height: 48,
     paddingHorizontal: 16,
     fontSize: 15,
-    marginBottom: 16,
+    marginBottom: 6,
   },
-  patButton: {
+  hint: {
+    fontSize: 11,
+    color: '#71717a',
+    marginBottom: 20,
+    lineHeight: 16,
+  },
+  button: {
     backgroundColor: '#6200ee',
     borderRadius: 8,
     height: 48,
     alignItems: 'center',
     justifyContent: 'center',
+    marginTop: 12,
   },
-  patButtonText: {
+  buttonText: {
     color: '#fff',
     fontSize: 16,
     fontWeight: 'bold',
