@@ -20,6 +20,7 @@ interface ConsoleOverlayProps {
 
 export const ConsoleOverlay: React.FC<ConsoleOverlayProps> = ({ visible, onClose }) => {
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
   const flatListRef = useRef<FlatList>(null);
 
   useEffect(() => {
@@ -78,14 +79,39 @@ export const ConsoleOverlay: React.FC<ConsoleOverlayProps> = ({ visible, onClose
             data={logs}
             keyExtractor={(_, index) => index.toString()}
             contentContainerStyle={styles.logList}
-            renderItem={({ item }) => (
-              <View style={styles.logRow}>
-                <Text style={styles.logTimestamp}>[{item.timestamp}]</Text>
-                <Text style={[styles.logText, { color: getLogColor(item.level) }]}>
-                  [{item.level.toUpperCase()}] {item.message}
-                </Text>
-              </View>
-            )}
+            renderItem={({ item, index }) => {
+              const isExpanded = expandedIndex === index;
+              const hasPayload = !!item.fullPayload;
+
+              let formattedPayload = '';
+              if (hasPayload && item.fullPayload) {
+                try {
+                  formattedPayload = JSON.stringify(JSON.parse(item.fullPayload), null, 2);
+                } catch {
+                  formattedPayload = item.fullPayload;
+                }
+              }
+
+              return (
+                <View style={styles.logRowContainer}>
+                  <TouchableOpacity
+                    style={styles.logRow}
+                    disabled={!hasPayload}
+                    onPress={() => setExpandedIndex(isExpanded ? null : index)}
+                  >
+                    <Text style={styles.logTimestamp}>[{item.timestamp}]</Text>
+                    <Text style={[styles.logText, { color: getLogColor(item.level) }]}>
+                      [{item.level.toUpperCase()}] {item.message} {hasPayload ? (isExpanded ? '▼' : '▶ (tap to expand payload)') : ''}
+                    </Text>
+                  </TouchableOpacity>
+                  {isExpanded && hasPayload && (
+                    <View style={styles.payloadBox}>
+                      <Text selectable style={styles.payloadText}>{formattedPayload}</Text>
+                    </View>
+                  )}
+                </View>
+              );
+            }}
             ListEmptyComponent={
               <View style={styles.emptyContainer}>
                 <Text style={styles.emptyText}>No logs recorded yet.</Text>
@@ -148,6 +174,26 @@ const styles = StyleSheet.create({
   },
   logList: {
     padding: 16,
+  },
+  logRowContainer: {
+    borderBottomWidth: 1,
+    borderColor: '#18181b',
+    paddingVertical: 4,
+  },
+  payloadBox: {
+    backgroundColor: '#18181b',
+    borderWidth: 1,
+    borderColor: '#27272a',
+    borderRadius: 6,
+    padding: 8,
+    marginTop: 6,
+    marginLeft: 20,
+  },
+  payloadText: {
+    color: '#a1a1aa',
+    fontSize: 11,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    lineHeight: 15,
   },
   logRow: {
     flexDirection: 'row',
