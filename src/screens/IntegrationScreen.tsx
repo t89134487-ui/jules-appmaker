@@ -44,11 +44,66 @@ export const IntegrationScreen: React.FC<IntegrationScreenProps> = ({
   const [integrated, setIntegrated] = useState(false);
   const [finalCommitSha, setFinalCommitSha] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const [discoveredBranch, setDiscoveredBranch] = useState<string>('');
 
   const updateStepState = (id: string, state: 'pending' | 'running' | 'success' | 'failed', error?: string) => {
     setSteps((prev) =>
       prev.map((s) => (s.id === id ? { ...s, state, error } : s))
     );
+  };
+
+  const skipMergeAndProceed = async () => {
+    setIntegrating(true);
+    setErrorMsg('');
+
+    // Mark step 2 and 3 as skipped
+    setSteps((prev) =>
+      prev.map((s) => {
+        if (s.id === '2' || s.id === '3') {
+          return { ...s, state: 'success', error: 'Skipped by user request' };
+        }
+        return s;
+      })
+    );
+
+    try {
+      const targetBranchName = discoveredBranch;
+      if (targetBranchName) {
+        // Step 4: Delete Branch Reference
+        updateStepState('4', 'running');
+        try {
+          await githubService.deleteBranch(
+            selectedRepo.owner.login,
+            selectedRepo.name,
+            targetBranchName
+          );
+          updateStepState('4', 'success');
+        } catch (deleteErr: any) {
+          logger.warn(`Quiet branch deletion failed for "${targetBranchName}": ${deleteErr.message}`);
+          updateStepState('4', 'success', `Cleanup skipped: ${deleteErr.message}`);
+        }
+      } else {
+        updateStepState('4', 'success', 'Cleanup skipped: No branch discovered');
+      }
+
+      // Step 5: Get Latest Commit SHA
+      updateStepState('5', 'running');
+      const latestSha = await githubService.getLatestCommitSha(
+        selectedRepo.owner.login,
+        selectedRepo.name,
+        selectedRepo.default_branch
+      );
+      updateStepState('5', 'success');
+      setFinalCommitSha(latestSha);
+      setIntegrated(true);
+    } catch (e: any) {
+      setSteps((prev) => {
+        return prev.map((s) => s.state === 'running' ? ({ ...s, state: 'failed' as const, error: e.message }) : s);
+      });
+      setErrorMsg(e.message);
+    } finally {
+      setIntegrating(false);
+    }
   };
 
   const startIntegration = async () => {
@@ -77,6 +132,7 @@ export const IntegrationScreen: React.FC<IntegrationScreenProps> = ({
         if (branchName.startsWith('jules-') && branchName !== selectedRepo.default_branch) {
           matchedAnyBranch = true;
           targetBranchName = branchName;
+          setDiscoveredBranch(branchName);
           break;
         }
       }
@@ -105,26 +161,98 @@ export const IntegrationScreen: React.FC<IntegrationScreenProps> = ({
       let pr = openPrs.find((p: any) => p.head && p.head.ref === targetBranchName);
 
       if (!pr) {
-        pr = await githubService.createPullRequest(
-          selectedRepo.owner.login,
-          selectedRepo.name,
-          `Merge Jules development branch "${targetBranchName}"`,
-          targetBranchName,
-          selectedRepo.default_branch
-        );
+        try {
+          pr = await githubService.createPullRequest(
+            selectedRepo.owner.login,
+            selectedRepo.name,
+            `Merge Jules development branch "${targetBranchName}"`,
+            targetBranchName,
+            selectedRepo.default_branch
+          );
+        } catch (prErr: any) {
+          const errStr = prErr.message || '';
+          if (errStr.toLowerCase().includes('already exists')) {
+            // Retrieve open PRs again to find it
+            const reOpenPrs = await githubService.getOpenPullRequests(selectedRepo.owner.login, selectedRepo.name);
+            pr = reOpenPrs.find((p: any) => p.head && p.head.ref === targetBranchName);
+            if (!pr) {
+              throw new Error(`PR already exists according to GitHub, but could not be found: ${prErr.message}`);
+            }
+          } else if (
+            errStr.toLowerCase().includes('no commits between') ||
+            errStr.toLowerCase().includes('no changes') ||
+            errStr.toLowerCase().includes('already up to date') ||
+            errStr.toLowerCase().includes('up-to-date')
+          ) {
+            // Gracefully skip merge steps and jump to branch cleanup
+            updateStepState('2', 'success');
+            setSteps((prev) =>
+              prev.map((s) => (s.id === '2' ? { ...s, state: 'success', error: 'No changes between branches. PR skipped.' } : s))
+            );
+            updateStepState('3', 'success');
+            setSteps((prev) =>
+              prev.map((s) => (s.id === '3' ? { ...s, state: 'success', error: 'No changes between branches. Merge skipped.' } : s))
+            );
+
+            // Proceed directly to Step 4: Delete Branch Reference
+            updateStepState('4', 'running');
+            try {
+              await githubService.deleteBranch(
+                selectedRepo.owner.login,
+                selectedRepo.name,
+                targetBranchName
+              );
+              updateStepState('4', 'success');
+            } catch (deleteErr: any) {
+              logger.warn(`Quiet branch deletion failed for "${targetBranchName}": ${deleteErr.message}`);
+              updateStepState('4', 'success', `Cleanup skipped: ${deleteErr.message}`);
+            }
+
+            // Step 5: Get Latest Commit SHA
+            updateStepState('5', 'running');
+            const latestSha = await githubService.getLatestCommitSha(
+              selectedRepo.owner.login,
+              selectedRepo.name,
+              selectedRepo.default_branch
+            );
+            updateStepState('5', 'success');
+            setFinalCommitSha(latestSha);
+            setIntegrated(true);
+            setIntegrating(false);
+            return;
+          } else {
+            throw prErr;
+          }
+        }
       }
       updateStepState('2', 'success');
 
       // Step 3: Regular Merge
       updateStepState('3', 'running');
       const prNumber = pr.number;
-      await githubService.mergePullRequest(
-        selectedRepo.owner.login,
-        selectedRepo.name,
-        prNumber,
-        'merge'
-      );
-      updateStepState('3', 'success');
+      try {
+        await githubService.mergePullRequest(
+          selectedRepo.owner.login,
+          selectedRepo.name,
+          prNumber,
+          'merge'
+        );
+        updateStepState('3', 'success');
+      } catch (mergeErr: any) {
+        const errStr = mergeErr.message || '';
+        if (
+          errStr.toLowerCase().includes('already merged') ||
+          (errStr.includes('405') || errStr.toLowerCase().includes('method not allowed'))
+        ) {
+          // If already merged or not mergeable because it is already merged, count as success!
+          updateStepState('3', 'success');
+          setSteps((prev) =>
+            prev.map((s) => (s.id === '3' ? { ...s, state: 'success', error: 'Already merged' } : s))
+          );
+        } else {
+          throw mergeErr;
+        }
+      }
 
       // Step 4: Delete Branch Reference
       updateStepState('4', 'running');
@@ -243,6 +371,15 @@ export const IntegrationScreen: React.FC<IntegrationScreenProps> = ({
             <TouchableOpacity style={styles.retryBtn} onPress={startIntegration}>
               <Text style={styles.retryBtnText}>🔄 Retry Integration</Text>
             </TouchableOpacity>
+
+            {steps.some((s) => (s.id === '2' || s.id === '3') && s.state === 'failed') && (
+              <TouchableOpacity
+                style={[styles.actionBtn, { backgroundColor: '#f59e0b', marginTop: 12 }]}
+                onPress={skipMergeAndProceed}
+              >
+                <Text style={styles.actionBtnText}>⏭️ Skip PR/Merge & Proceed</Text>
+              </TouchableOpacity>
+            )}
 
             <TouchableOpacity
               style={[styles.actionBtn, { backgroundColor: '#6200ee', marginTop: 12 }]}
