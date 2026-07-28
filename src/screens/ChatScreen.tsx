@@ -30,6 +30,7 @@ interface ChatScreenProps {
   onSessionStarted: (sessionId: string) => void;
   onSessionStateFetched?: (state: string) => void;
   onViewBuildProgress?: () => void;
+  onStartIntegration?: () => void;
   onBack: () => void;
 }
 
@@ -42,6 +43,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   onSessionStarted,
   onSessionStateFetched,
   onViewBuildProgress,
+  onStartIntegration,
   onBack,
 }) => {
   const [session, setSession] = useState<JulesSession | null>(null);
@@ -50,29 +52,11 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   const [message, setMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [mergedBranches, setMergedBranches] = useState<Record<string, boolean>>({});
-  const [isMerging, setIsMerging] = useState(false);
   const [failedMessages, setFailedMessages] = useState<Array<{ id: string; text: string; createTime: string }>>([]);
   const [jsonModalVisible, setJsonModalVisible] = useState(false);
-  interface LocalMergeStatus {
-    id: string;
-    text: string;
-    createTime: string;
-  }
-  const [localMergeStatuses, setLocalMergeStatuses] = useState<LocalMergeStatus[]>([]);
   const [hasAttemptedMerge, setHasAttemptedMerge] = useState(false);
   const [buildTargetCommitSha, setBuildTargetCommitSha] = useState<string | null>(null);
   const [buildApkAsset, setBuildApkAsset] = useState<any | null>(null);
-
-  const addMergeStatus = (status: string) => {
-    setLocalMergeStatuses((prev) => [
-      ...prev,
-      {
-        id: `local-merge-${Math.random()}-${Date.now()}`,
-        text: status,
-        createTime: new Date().toISOString(),
-      },
-    ]);
-  };
 
   // Initial prompt state
   const [initialPrompt, setInitialPrompt] = useState('');
@@ -94,132 +78,11 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     }
   };
 
-  const handleMergeAndGoToApkView = async () => {
-    if (!gitHubService) {
-      Alert.alert('Error', 'GitHub Service is not initialized.');
-      return;
-    }
-
-    setIsMerging(true);
-    addMergeStatus('Starting on-demand branch integration...');
-
-    try {
-      logger.info('ChatScreen: Fetching repo branches to perform on-demand merge...');
-      addMergeStatus('Checking repository branches to integrate code...');
-      const branches = await gitHubService.getBranches(selectedRepo.owner.login, selectedRepo.name);
-
-      let matchedAnyBranch = false;
-      let targetBranchName = '';
-
-      for (const branch of branches) {
-        const branchName = branch.name;
-
-        // Look for any branch starting with 'jules-' that is not the default branch
-        if (branchName.startsWith('jules-') && branchName !== selectedRepo.default_branch) {
-          matchedAnyBranch = true;
-          targetBranchName = branchName;
-          break;
-        }
-      }
-
-      if (!matchedAnyBranch) {
-        addMergeStatus('No active development branch found (already merged?).');
-        logger.info('ChatScreen: No active branch to merge. Navigating to APK progress...');
-        if (onViewBuildProgress) {
-          onViewBuildProgress();
-        }
-        return;
-      }
-
-      logger.info(`ChatScreen: Detected branch "${targetBranchName}" to merge.`);
-      addMergeStatus(`Integrating development branch "${targetBranchName}" via rebase...`);
-
-      // Fetch open PRs to see if one already exists
-      const openPrs = await gitHubService.getOpenPullRequests(selectedRepo.owner.login, selectedRepo.name);
-      let pr = openPrs.find((p: any) => p.head && p.head.ref === targetBranchName);
-
-      if (!pr) {
-        logger.info(`ChatScreen: No open PR found for branch "${targetBranchName}". Creating new PR...`);
-        addMergeStatus(`Creating integration Pull Request for "${targetBranchName}"...`);
-        pr = await gitHubService.createPullRequest(
-          selectedRepo.owner.login,
-          selectedRepo.name,
-          `Merge Jules development branch "${targetBranchName}"`,
-          targetBranchName,
-          selectedRepo.default_branch
-        );
-      }
-
-      const prNumber = pr.number;
-      logger.info(`ChatScreen: Merging PR #${prNumber} via rebase...`);
-      addMergeStatus(`Performing fast-forward rebase merge for PR #${prNumber}...`);
-
-      const mergeResult = await gitHubService.mergePullRequest(
-        selectedRepo.owner.login,
-        selectedRepo.name,
-        prNumber,
-        'rebase'
-      );
-      logger.info(`ChatScreen: PR #${prNumber} merged successfully via rebase: ${JSON.stringify(mergeResult)}`);
-      addMergeStatus(`Rebase merge complete! Cleaning up development branch "${targetBranchName}"...`);
-
-      // Delete the branch quietly to clean up references
-      try {
-        await gitHubService.deleteBranch(
-          selectedRepo.owner.login,
-          selectedRepo.name,
-          targetBranchName
-        );
-        logger.info(`ChatScreen: Branch "${targetBranchName}" deleted successfully quietly.`);
-        addMergeStatus(`Integrated "${targetBranchName}" successfully via rebase and cleaned up branch.`);
-      } catch (deleteErr: any) {
-        logger.warn(`ChatScreen: Quiet branch deletion failed for "${targetBranchName}": ${deleteErr.message}`);
-        addMergeStatus(`Integrated "${targetBranchName}" successfully via rebase (cleanup skipped).`);
-      }
-
-      // After successful rebase merge, fetch the latest commit of the default branch to poll the build
-      try {
-        const latestSha = await gitHubService.getLatestCommitSha(
-          selectedRepo.owner.login,
-          selectedRepo.name,
-          selectedRepo.default_branch
-        );
-        logger.info(`ChatScreen: Set build target commit SHA to default branch head: ${latestSha}`);
-        setBuildTargetCommitSha(latestSha);
-      } catch (shaErr: any) {
-        logger.warn(`ChatScreen: Failed to retrieve default branch latest SHA: ${shaErr.message}`);
-      }
-
-      Alert.alert(
-        'Code Integrated!',
-        'Your development branch has been successfully merged into the main branch. Standalone APK build has started in GitHub Actions!',
-        [
-          {
-            text: 'View Build Progress',
-            onPress: () => {
-              if (onViewBuildProgress) {
-                onViewBuildProgress();
-              }
-            }
-          }
-        ]
-      );
-
-    } catch (e: any) {
-      logger.error(`ChatScreen: Rebase merge failed: ${e.message}`);
-      addMergeStatus(`Failed to integrate branch: ${e.message}`);
-      Alert.alert('Integration Failed', `Could not merge development branch: ${e.message}`);
-    } finally {
-      setIsMerging(false);
-    }
-  };
-
   // Load existing session if specified on entry
   useEffect(() => {
     if (initialSessionId) {
       logger.info(`Resuming existing session thread: ${initialSessionId}`);
       setLoading(true);
-      setLocalMergeStatuses([]);
       setHasAttemptedMerge(false);
       setBuildTargetCommitSha(null);
       setBuildApkAsset(null);
@@ -233,7 +96,6 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     } else {
       setSession(null);
       setActivities([]);
-      setLocalMergeStatuses([]);
       setHasAttemptedMerge(false);
       setBuildTargetCommitSha(null);
       setBuildApkAsset(null);
@@ -295,7 +157,6 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       });
 
       logger.info(`Session created successfully. ID: ${newSession.id}. State: ${newSession.state}`);
-      setLocalMergeStatuses([]);
       setHasAttemptedMerge(false);
       setBuildTargetCommitSha(null);
       setBuildApkAsset(null);
@@ -393,7 +254,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   };
 
   // Helper to render activity logs/messages
-  const renderActivityItem = (act: JulesActivity) => {
+  const renderActivityItem = (act: JulesActivity, isLastMessage = true) => {
     if (act.userMessaged) {
       return (
         <View key={act.id} style={[styles.msgRow, styles.msgUser]}>
@@ -442,18 +303,16 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     if (act.sessionCompleted) {
       return (
         <View key={act.id} style={styles.completedCard}>
-          <Text style={styles.completedTitle}>🎉 Task Completed!</Text>
-          <Text style={styles.completedDesc}>{act.description || 'Jules has successfully completed the task!'}</Text>
+          <Text selectable style={styles.completedTitle}>🎉 Task Completed!</Text>
+          <Text selectable style={styles.completedDesc}>{act.description || 'Jules has successfully completed the task!'}</Text>
           <TouchableOpacity
-            style={styles.chatBuildBtn}
-            onPress={handleMergeAndGoToApkView}
-            disabled={isMerging}
+            style={[styles.chatBuildBtn, !isLastMessage && { backgroundColor: '#2e2e33' }]}
+            onPress={onStartIntegration}
+            disabled={!isLastMessage}
           >
-            {isMerging ? (
-              <ActivityIndicator color="#fff" size="small" />
-            ) : (
-              <Text style={styles.chatBuildBtnText}>🚀 Integrate Code & View APK</Text>
-            )}
+            <Text style={[styles.chatBuildBtnText, !isLastMessage && { color: '#71717a' }]}>
+              {isLastMessage ? '🚀 Integrate Code & View APK' : 'Integrate Code (Disabled - Newer message exists)'}
+            </Text>
           </TouchableOpacity>
         </View>
       );
@@ -514,28 +373,18 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   // Combined chronological feed of API activities and local merge statuses
   // We use index preservation to prevent Hermes/JSC unstable sorting from scrambling the feed.
   const combinedFeed = [
-    ...activities.map((act, idx) => ({ ...act, originalIdx: idx, isLocalMergeStatus: false, isFailedMessage: false, failedText: undefined as string | undefined })),
-    ...localMergeStatuses.map(status => ({
-      id: status.id,
-      originalIdx: 999999,
-      isLocalMergeStatus: true,
-      description: status.text,
-      createTime: status.createTime,
-      isFailedMessage: false,
-      failedText: undefined as string | undefined,
-    })),
+    ...activities.map((act, idx) => ({ ...act, originalIdx: idx, isFailedMessage: false, failedText: undefined as string | undefined })),
     ...failedMessages.map(failed => ({
       id: failed.id,
       originalIdx: 999999,
-      isLocalMergeStatus: false,
       isFailedMessage: true,
       description: '',
       failedText: failed.text as string | undefined,
       createTime: failed.createTime,
     }))
   ].sort((a, b) => {
-    const isTemporalA = a.isLocalMergeStatus || a.isFailedMessage;
-    const isTemporalB = b.isLocalMergeStatus || b.isFailedMessage;
+    const isTemporalA = a.isFailedMessage;
+    const isTemporalB = b.isFailedMessage;
 
     if (isTemporalA && isTemporalB) {
       return new Date(a.createTime).getTime() - new Date(b.createTime).getTime();
@@ -549,8 +398,6 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     }
     return (a.originalIdx || 0) - (b.originalIdx || 0);
   }).slice(-50); // ONLY show the last fifty items!
-
-  const lastLocalMergeIdx = combinedFeed.map(item => !!item.isLocalMergeStatus).lastIndexOf(true);
 
   // If no session active, show creation panel
   if (!session) {
@@ -651,109 +498,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
             );
           }
 
-          if (item.isLocalMergeStatus) {
-            const isLastLocalMerge = idx === lastLocalMergeIdx;
-
-            // If this is the last integration message, and we are either building or have a ready APK, we show the customized cards!
-            if (isLastLocalMerge && buildApkAsset) {
-              return (
-                <View key={item.id} style={styles.mergeStatusCardReady}>
-                  <Text style={styles.mergeStatusTitleReady}>📦 APK Build Success!</Text>
-                  <Text style={styles.mergeStatusDescReady}>
-                    Your standalone, test-key signed Android APK is ready!
-                  </Text>
-
-                  <TouchableOpacity
-                    style={styles.chatBuildBtnReady}
-                    onPress={async () => {
-                      try {
-                        const supported = await Linking.canOpenURL(buildApkAsset.browser_download_url);
-                        if (supported) {
-                          await Linking.openURL(buildApkAsset.browser_download_url);
-                        } else {
-                          Alert.alert('Error', `Cannot open download URL: ${buildApkAsset.browser_download_url}`);
-                        }
-                      } catch (e: any) {
-                        Alert.alert('Download Failed', e.message);
-                      }
-                    }}
-                  >
-                    <Text style={styles.chatBuildBtnTextReady}>Install / Download APK</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={styles.chatCopyBtnReady}
-                    onPress={async () => {
-                      await ClipboardExpo.setStringAsync(buildApkAsset.browser_download_url);
-                      Alert.alert('Copied!', 'APK Download URL copied to clipboard.');
-                    }}
-                  >
-                    <Text style={styles.chatCopyBtnTextReady}>📋 Copy APK Download Link</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[styles.chatBuildBtnReady, { backgroundColor: '#3b82f6', marginTop: 10 }]}
-                    onPress={async () => {
-                      const proxyUrl = `https://gh-proxy.org/${buildApkAsset.browser_download_url}`;
-                      try {
-                        const supported = await Linking.canOpenURL(proxyUrl);
-                        if (supported) {
-                          await Linking.openURL(proxyUrl);
-                        } else {
-                          Alert.alert('Error', `Cannot open download URL: ${proxyUrl}`);
-                        }
-                      } catch (e: any) {
-                        Alert.alert('Download Failed', e.message);
-                      }
-                    }}
-                  >
-                    <Text style={styles.chatBuildBtnTextReady}>⚡ Download via Proxy (gh-proxy)</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[styles.chatCopyBtnReady, { marginTop: 10 }]}
-                    onPress={async () => {
-                      const proxyUrl = `https://gh-proxy.org/${buildApkAsset.browser_download_url}`;
-                      await ClipboardExpo.setStringAsync(proxyUrl);
-                      Alert.alert('Copied!', 'Proxy APK Download URL copied to clipboard.');
-                    }}
-                  >
-                    <Text style={styles.chatCopyBtnTextReady}>📋 Copy Proxy Download Link</Text>
-                  </TouchableOpacity>
-
-                  <Text style={styles.apkMetaReady}>
-                    File: {buildApkAsset.name} (Commit: {buildTargetCommitSha?.substring(0, 7)})
-                  </Text>
-                </View>
-              );
-            }
-
-            if (isLastLocalMerge && buildTargetCommitSha) {
-              return (
-                <View key={item.id} style={styles.mergeStatusCardCompiling}>
-                  <Text style={styles.mergeStatusTitleCompiling}>⚙️ Integration Status: Compiling APK...</Text>
-                  <Text style={styles.mergeStatusDescCompiling}>
-                    Rebase merge complete! Standalone production APK is compiling in the background. (Typically takes 3 to 5 minutes)
-                  </Text>
-                  {onViewBuildProgress && (
-                    <TouchableOpacity style={[styles.chatBuildBtnCompiling, { marginTop: 12 }]} onPress={onViewBuildProgress}>
-                      <Text style={styles.chatBuildBtnTextCompiling}>🚀 View APK Build Progress</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-              );
-            }
-
-            // Otherwise, render normal static status card
-            return (
-              <View key={item.id} style={styles.mergeStatusCard}>
-                <Text style={styles.mergeStatusTitle}>⚙️ Integration Status</Text>
-                <Text style={styles.mergeStatusDesc}>{item.description}</Text>
-              </View>
-            );
-          } else {
-            return renderActivityItem(item as unknown as JulesActivity);
-          }
+          const isLastMessage = idx === combinedFeed.length - 1;
+          return renderActivityItem(item as unknown as JulesActivity, isLastMessage);
         })}
       </ScrollView>
 
