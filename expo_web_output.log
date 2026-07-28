@@ -9,11 +9,13 @@ Waiting on http://localhost:8081
 
 2 packages may need updating. Run npx expo install --check for details.
 Logs for your project will appear below.
-Web Bundled 2434ms index.ts (368 modules)
+Web Bundled 7356ms index.ts (417 modules)
 Web  INFO  %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
 Web  WARN  "shadow*" style props are deprecated. Use "boxShadow".
 Web  LOG  Running application "main" with appParams:
  {"hydrate": undefined, "rootTag": "#root"}
 Development-level warnings: ON.
 Performance optimizations: OFF.
-Web  LOG  [6:06:35 AM] [INFO] Restoring persisted credentials from AsyncStorage...
+Web  LOG  [5:04:22 AM] [INFO] Restoring persisted credentials from AsyncStorage...
+Web  LOG  [5:04:22 AM] [INFO] No credentials found. Routing to LoginScreen.
+Web  WARN  props.pointerEvents is deprecated. Use style.pointerEvents
