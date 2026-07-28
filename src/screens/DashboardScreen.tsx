@@ -14,6 +14,7 @@ import * as ClipboardExpo from 'expo-clipboard';
 import { GitHubRepo, GitHubService } from '../services/github';
 import { JulesService, JulesSource } from '../services/jules';
 import { logger } from '../services/logger';
+import { CONFIG } from '../config';
 
 interface DashboardScreenProps {
   githubService: GitHubService;
@@ -256,7 +257,12 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
       {/* Header */}
       <View style={styles.header}>
         <View style={{ flex: 1, marginRight: 8 }}>
-          <Text style={styles.title}>Jules Chats</Text>
+          <View style={styles.titleRow}>
+            <Text style={styles.title}>Jules Chats</Text>
+            <View style={styles.versionBadge}>
+              <Text style={styles.versionBadgeText}>{CONFIG.VERSION}</Text>
+            </View>
+          </View>
           <Text style={styles.subtitle}>Select a thread to resume coding or start new</Text>
         </View>
         <View style={styles.headerBtns}>
@@ -643,10 +649,28 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     marginBottom: 20,
   },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
   title: {
     fontSize: 24,
     fontWeight: 'bold',
     color: '#fff',
+  },
+  versionBadge: {
+    backgroundColor: '#1e1e24',
+    borderWidth: 1,
+    borderColor: '#3a3a40',
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    marginLeft: 8,
+  },
+  versionBadgeText: {
+    color: '#a0a0ab',
+    fontSize: 11,
+    fontWeight: 'bold',
   },
   subtitle: {
     fontSize: 14,

@@ -11,7 +11,9 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  Linking,
 } from 'react-native';
+import * as ClipboardExpo from 'expo-clipboard';
 import { JulesService, JulesSession, JulesActivity } from '../services/jules';
 import { GitHubRepo } from '../services/github';
 import { logger } from '../services/logger';
@@ -54,6 +56,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   }
   const [localMergeStatuses, setLocalMergeStatuses] = useState<LocalMergeStatus[]>([]);
   const [hasAttemptedMerge, setHasAttemptedMerge] = useState(false);
+  const [buildTargetCommitSha, setBuildTargetCommitSha] = useState<string | null>(null);
+  const [buildApkAsset, setBuildApkAsset] = useState<any | null>(null);
 
   const addMergeStatus = (status: string) => {
     setLocalMergeStatuses((prev) => [
@@ -147,6 +151,19 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                     logger.warn(`ChatScreen: Quiet branch deletion failed for "${branchName}": ${deleteErr.message}`);
                     addMergeStatus(`Integrated "${branchName}" successfully via rebase (cleanup skipped).`);
                   }
+
+                  // After successful rebase merge, fetch the latest commit of the default branch to poll the build
+                  try {
+                    const latestSha = await gitHubService.getLatestCommitSha(
+                      selectedRepo.owner.login,
+                      selectedRepo.name,
+                      selectedRepo.default_branch
+                    );
+                    logger.info(`ChatScreen: Set build target commit SHA to default branch head: ${latestSha}`);
+                    setBuildTargetCommitSha(latestSha);
+                  } catch (shaErr: any) {
+                    logger.warn(`ChatScreen: Failed to retrieve default branch latest SHA: ${shaErr.message}`);
+                  }
                 } catch (mergeErr: any) {
                   logger.error(`ChatScreen: Rebase merge failed for branch "${branchName}": ${mergeErr.message}`);
                   addMergeStatus(`Failed to integrate branch: ${mergeErr.message}`);
@@ -174,6 +191,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       setLoading(true);
       setLocalMergeStatuses([]);
       setHasAttemptedMerge(false);
+      setBuildTargetCommitSha(null);
+      setBuildApkAsset(null);
       fetchSessionState(initialSessionId)
         .then(() => {
           onSessionStarted(initialSessionId);
@@ -186,6 +205,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       setActivities([]);
       setLocalMergeStatuses([]);
       setHasAttemptedMerge(false);
+      setBuildTargetCommitSha(null);
+      setBuildApkAsset(null);
     }
   }, [initialSessionId]);
 
@@ -246,6 +267,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       logger.info(`Session created successfully. ID: ${newSession.id}. State: ${newSession.state}`);
       setLocalMergeStatuses([]);
       setHasAttemptedMerge(false);
+      setBuildTargetCommitSha(null);
+      setBuildApkAsset(null);
       setSession(newSession);
       onSessionStarted(newSession.id);
       logger.info('Fetching initial activities...');
@@ -374,16 +397,61 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     return null;
   };
 
+  // Poll for APK build completion in the background when buildTargetCommitSha is active
+  useEffect(() => {
+    if (!buildTargetCommitSha || buildApkAsset || !gitHubService) return;
+
+    logger.info(`ChatScreen: Starting background poll for APK build of commit: ${buildTargetCommitSha}`);
+
+    const checkApk = async () => {
+      try {
+        const shortSha = buildTargetCommitSha.substring(0, 7);
+        const apk = await gitHubService.getApkAssetForCommit(
+          selectedRepo.owner.login,
+          selectedRepo.name,
+          shortSha
+        );
+        if (apk) {
+          logger.info(`ChatScreen: APK ready! Set buildApkAsset: ${apk.name}`);
+          setBuildApkAsset(apk);
+        }
+      } catch (e: any) {
+        logger.warn(`ChatScreen: Error while polling APK build: ${e.message}`);
+      }
+    };
+
+    // Run immediately on mount/update
+    checkApk();
+
+    const interval = setInterval(checkApk, 10000); // Check every 10 seconds
+
+    return () => clearInterval(interval);
+  }, [buildTargetCommitSha, buildApkAsset, selectedRepo.owner.login, selectedRepo.name]);
+
   // Combined chronological feed of API activities and local merge statuses
+  // We use index preservation to prevent Hermes/JSC unstable sorting from scrambling the feed.
   const combinedFeed = [
-    ...activities.map(act => ({ ...act, isLocalMergeStatus: false })),
+    ...activities.map((act, idx) => ({ ...act, originalIdx: idx, isLocalMergeStatus: false })),
     ...localMergeStatuses.map(status => ({
       id: status.id,
+      originalIdx: 999999,
       isLocalMergeStatus: true,
       description: status.text,
       createTime: status.createTime,
     }))
-  ].sort((a, b) => new Date(a.createTime).getTime() - new Date(b.createTime).getTime());
+  ].sort((a, b) => {
+    if (a.isLocalMergeStatus && b.isLocalMergeStatus) {
+      return new Date(a.createTime).getTime() - new Date(b.createTime).getTime();
+    }
+    if (a.isLocalMergeStatus || b.isLocalMergeStatus) {
+      const timeA = new Date(a.createTime).getTime();
+      const timeB = new Date(b.createTime).getTime();
+      if (timeA !== timeB) {
+        return timeA - timeB;
+      }
+    }
+    return (a.originalIdx || 0) - (b.originalIdx || 0);
+  });
 
   const lastLocalMergeIdx = combinedFeed.map(item => !!item.isLocalMergeStatus).lastIndexOf(true);
 
@@ -469,15 +537,72 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
         {combinedFeed.map((item, idx) => {
           if (item.isLocalMergeStatus) {
             const isLastLocalMerge = idx === lastLocalMergeIdx;
+
+            // If this is the last integration message, and we are either building or have a ready APK, we show the customized cards!
+            if (isLastLocalMerge && buildApkAsset) {
+              return (
+                <View key={item.id} style={styles.mergeStatusCardReady}>
+                  <Text style={styles.mergeStatusTitleReady}>📦 APK Build Success!</Text>
+                  <Text style={styles.mergeStatusDescReady}>
+                    Your standalone, test-key signed Android APK is ready!
+                  </Text>
+
+                  <TouchableOpacity
+                    style={styles.chatBuildBtnReady}
+                    onPress={async () => {
+                      try {
+                        const supported = await Linking.canOpenURL(buildApkAsset.browser_download_url);
+                        if (supported) {
+                          await Linking.openURL(buildApkAsset.browser_download_url);
+                        } else {
+                          Alert.alert('Error', `Cannot open download URL: ${buildApkAsset.browser_download_url}`);
+                        }
+                      } catch (e: any) {
+                        Alert.alert('Download Failed', e.message);
+                      }
+                    }}
+                  >
+                    <Text style={styles.chatBuildBtnTextReady}>Install / Download APK</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.chatCopyBtnReady}
+                    onPress={async () => {
+                      await ClipboardExpo.setStringAsync(buildApkAsset.browser_download_url);
+                      Alert.alert('Copied!', 'APK Download URL copied to clipboard.');
+                    }}
+                  >
+                    <Text style={styles.chatCopyBtnTextReady}>📋 Copy APK Download Link</Text>
+                  </TouchableOpacity>
+
+                  <Text style={styles.apkMetaReady}>
+                    File: {buildApkAsset.name} (Commit: {buildTargetCommitSha?.substring(0, 7)})
+                  </Text>
+                </View>
+              );
+            }
+
+            if (isLastLocalMerge && buildTargetCommitSha) {
+              return (
+                <View key={item.id} style={styles.mergeStatusCardCompiling}>
+                  <Text style={styles.mergeStatusTitleCompiling}>⚙️ Integration Status: Compiling APK...</Text>
+                  <Text style={styles.mergeStatusDescCompiling}>
+                    Rebase merge complete! Standalone production APK is compiling in the background. (Typically takes 3 to 5 minutes)
+                  </Text>
+                  {onViewBuildProgress && (
+                    <TouchableOpacity style={[styles.chatBuildBtnCompiling, { marginTop: 12 }]} onPress={onViewBuildProgress}>
+                      <Text style={styles.chatBuildBtnTextCompiling}>🚀 View APK Build Progress</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              );
+            }
+
+            // Otherwise, render normal static status card
             return (
               <View key={item.id} style={styles.mergeStatusCard}>
                 <Text style={styles.mergeStatusTitle}>⚙️ Integration Status</Text>
                 <Text style={styles.mergeStatusDesc}>{item.description}</Text>
-                {isLastLocalMerge && onViewBuildProgress && (
-                  <TouchableOpacity style={[styles.chatBuildBtn, { marginTop: 12 }]} onPress={onViewBuildProgress}>
-                    <Text style={styles.chatBuildBtnText}>🚀 View APK Build Progress</Text>
-                  </TouchableOpacity>
-                )}
               </View>
             );
           } else {
@@ -882,5 +1007,96 @@ const styles = StyleSheet.create({
     color: '#a0a0ab',
     fontSize: 12,
     lineHeight: 18,
+  },
+  mergeStatusCardReady: {
+    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+    borderWidth: 2,
+    borderColor: '#10b981',
+    borderRadius: 12,
+    padding: 18,
+    marginBottom: 12,
+    alignSelf: 'stretch',
+    shadowColor: '#10b981',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  mergeStatusTitleReady: {
+    color: '#10b981',
+    fontWeight: 'bold',
+    fontSize: 16,
+    marginBottom: 6,
+  },
+  mergeStatusDescReady: {
+    color: '#a0a0ab',
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 16,
+  },
+  chatBuildBtnReady: {
+    backgroundColor: '#10b981',
+    borderRadius: 8,
+    height: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10,
+  },
+  chatBuildBtnTextReady: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 15,
+  },
+  chatCopyBtnReady: {
+    borderWidth: 1,
+    borderColor: '#2e2e33',
+    backgroundColor: '#121214',
+    borderRadius: 8,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  chatCopyBtnTextReady: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: 'bold',
+  },
+  apkMetaReady: {
+    color: '#71717a',
+    fontSize: 11,
+    textAlign: 'center',
+  },
+  mergeStatusCardCompiling: {
+    backgroundColor: 'rgba(245, 158, 11, 0.1)',
+    borderWidth: 1,
+    borderColor: '#f59e0b',
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 12,
+    alignSelf: 'stretch',
+  },
+  mergeStatusTitleCompiling: {
+    color: '#f59e0b',
+    fontWeight: 'bold',
+    fontSize: 14,
+    marginBottom: 4,
+  },
+  mergeStatusDescCompiling: {
+    color: '#a0a0ab',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  chatBuildBtnCompiling: {
+    backgroundColor: '#f59e0b',
+    borderRadius: 8,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chatBuildBtnTextCompiling: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 13,
   },
 });
