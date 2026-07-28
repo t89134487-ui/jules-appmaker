@@ -381,9 +381,9 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       return (
         <View key={act.id} style={styles.planCard}>
           <Text style={styles.planTitle}>📋 Proposed Development Plan</Text>
-          {plan.steps.map((step) => (
+          {plan.steps.map((step, idx) => (
             <View key={step.id} style={styles.stepItem}>
-              <Text style={styles.stepIndex}>{step.index + 1}. {step.title}</Text>
+              <Text style={styles.stepIndex}>{idx + 1}. {step.title}</Text>
               <Text style={styles.stepDesc}>{step.description}</Text>
             </View>
           ))}
@@ -620,6 +620,36 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                     }}
                   >
                     <Text style={styles.chatCopyBtnTextReady}>📋 Copy APK Download Link</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.chatBuildBtnReady, { backgroundColor: '#3b82f6', marginTop: 10 }]}
+                    onPress={async () => {
+                      const proxyUrl = `https://gh-proxy.org/${buildApkAsset.browser_download_url}`;
+                      try {
+                        const supported = await Linking.canOpenURL(proxyUrl);
+                        if (supported) {
+                          await Linking.openURL(proxyUrl);
+                        } else {
+                          Alert.alert('Error', `Cannot open download URL: ${proxyUrl}`);
+                        }
+                      } catch (e: any) {
+                        Alert.alert('Download Failed', e.message);
+                      }
+                    }}
+                  >
+                    <Text style={styles.chatBuildBtnTextReady}>⚡ Download via Proxy (gh-proxy)</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.chatCopyBtnReady, { marginTop: 10 }]}
+                    onPress={async () => {
+                      const proxyUrl = `https://gh-proxy.org/${buildApkAsset.browser_download_url}`;
+                      await ClipboardExpo.setStringAsync(proxyUrl);
+                      Alert.alert('Copied!', 'Proxy APK Download URL copied to clipboard.');
+                    }}
+                  >
+                    <Text style={styles.chatCopyBtnTextReady}>📋 Copy Proxy Download Link</Text>
                   </TouchableOpacity>
 
                   <Text style={styles.apkMetaReady}>

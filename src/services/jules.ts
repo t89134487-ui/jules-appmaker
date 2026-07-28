@@ -92,10 +92,7 @@ export class JulesService {
 
   private async fetchWithAuth(url: string, options: RequestInit = {}): Promise<any> {
     const method = options.method || 'GET';
-    logger.info(`Jules Request: ${method} ${url}`);
-    if (options.body) {
-      logger.info(`Jules Request Body: ${options.body}`);
-    }
+    logger.info(`Jules Request: ${method} ${url}`, options.body ? String(options.body) : undefined);
 
     const headers = {
       'x-goog-api-key': this.apiKey,
@@ -119,10 +116,12 @@ export class JulesService {
         throw new Error(`Jules API Error: ${res.status} - ${msg}`);
       }
 
-      logger.info(`Jules Response code: ${res.status}`);
-      if (res.status === 204) return null;
+      if (res.status === 204) {
+        logger.info(`Jules Response code: ${res.status}`);
+        return null;
+      }
       const data = await res.json();
-      logger.info(`Jules Response payload success: ${JSON.stringify(data).substring(0, 300)}...`);
+      logger.info(`Jules Response success: ${res.status}`, JSON.stringify(data));
       return data;
     } catch (e: any) {
       logger.error(`Jules Fetch Failure: ${e.message}`);
