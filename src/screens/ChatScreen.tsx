@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   StyleSheet,
   Text,
@@ -7,18 +7,16 @@ import {
   TextInput,
   TouchableOpacity,
   ActivityIndicator,
-  FlatList,
   KeyboardAvoidingView,
   Platform,
   Alert,
   Linking,
 } from 'react-native';
+import { WebView } from 'react-native-webview';
 import * as ClipboardExpo from 'expo-clipboard';
-import { JulesService, JulesSession, JulesActivity } from '../services/jules';
-import { GitHubRepo } from '../services/github';
+import { JulesService, JulesSession } from '../services/jules';
+import { GitHubRepo, GitHubService } from '../services/github';
 import { logger } from '../services/logger';
-
-import { GitHubService } from '../services/github';
 
 interface ChatScreenProps {
   julesService: JulesService;
@@ -44,11 +42,10 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   onBack,
 }) => {
   const [session, setSession] = useState<JulesSession | null>(null);
-  const [activities, setActivities] = useState<JulesActivity[]>([]);
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState('');
-  const [submitting, setSubmitting] = useState(false);
+  const [initialPrompt, setInitialPrompt] = useState('');
   const [mergedBranches, setMergedBranches] = useState<Record<string, boolean>>({});
+
   interface LocalMergeStatus {
     id: string;
     text: string;
@@ -70,11 +67,6 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     ]);
   };
 
-  // Initial prompt state
-  const [initialPrompt, setInitialPrompt] = useState('');
-
-  const scrollRef = useRef<ScrollView>(null);
-
   const fetchSessionState = async (id: string) => {
     try {
       const sess = await julesService.getSession(id);
@@ -82,9 +74,6 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       if (onSessionStateFetched) {
         onSessionStateFetched(sess.state);
       }
-
-      const acts = await julesService.getActivities(id);
-      setActivities(acts);
 
       // Perform direct quiet merge if Jules has completed the task
       if (sess.state?.toUpperCase() === 'COMPLETED' && gitHubService && !hasAttemptedMerge) {
@@ -202,7 +191,6 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
         });
     } else {
       setSession(null);
-      setActivities([]);
       setLocalMergeStatuses([]);
       setHasAttemptedMerge(false);
       setBuildTargetCommitSha(null);
@@ -223,16 +211,6 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     return () => clearInterval(interval);
   }, [session?.id, session?.state]);
 
-  // Automatically scroll to end when activities are loaded or updated
-  useEffect(() => {
-    if (activities.length > 0) {
-      const timer = setTimeout(() => {
-        scrollRef.current?.scrollToEnd({ animated: true });
-      }, 150);
-      return () => clearTimeout(timer);
-    }
-  }, [activities.length, loading]);
-
   const handleStartSession = async () => {
     if (!initialPrompt.trim()) {
       Alert.alert('Error', 'Please describe the app you want to build');
@@ -243,7 +221,6 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     setLoading(true);
     try {
       // Append core CI generation prompt instructions autonomously ONLY if the repo has no existing sessions!
-      // Letting Jules decide the language, framework, and toolchain autonomously (e.g. Jetpack Compose/Kotlin, Flutter, etc.)
       const augmentedPrompt = hasExistingSessions
         ? initialPrompt.trim()
         : `${initialPrompt.trim()}
@@ -261,7 +238,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
         repoOwner: selectedRepo.owner.login,
         repoName: selectedRepo.name,
         branch: selectedRepo.default_branch,
-        requirePlanApproval: false, // Changed to false to prevent manual plan approval prompts
+        requirePlanApproval: false,
       });
 
       logger.info(`Session created successfully. ID: ${newSession.id}. State: ${newSession.state}`);
@@ -271,7 +248,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       setBuildApkAsset(null);
       setSession(newSession);
       onSessionStarted(newSession.id);
-      logger.info('Fetching initial activities...');
+      logger.info('Fetching initial session state...');
       await fetchSessionState(newSession.id);
     } catch (e: any) {
       logger.error(`Failed to start Jules session: ${e.message}`);
@@ -288,113 +265,6 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleSendMessage = async () => {
-    if (!message.trim() || !session) return;
-    setSubmitting(true);
-    const textToSend = message.trim();
-    setMessage('');
-    try {
-      await julesService.sendMessage(session.id, textToSend);
-
-      // Fetch immediately to display user message in the activities list
-      await fetchSessionState(session.id);
-
-      // Schedule subsequent fetches to catch state transition on Jules server
-      setTimeout(() => {
-        if (session) fetchSessionState(session.id);
-      }, 2000);
-      setTimeout(() => {
-        if (session) fetchSessionState(session.id);
-      }, 5000);
-    } catch (e: any) {
-      Alert.alert('Error Sending Message', e.message);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleApprovePlan = async () => {
-    if (!session) return;
-    setSubmitting(true);
-    try {
-      await julesService.approvePlan(session.id);
-      Alert.alert('Success', 'Plan approved! Jules will now execute the tasks.');
-      await fetchSessionState(session.id);
-    } catch (e: any) {
-      Alert.alert('Failed to Approve Plan', e.message);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  // Helper to render activity logs/messages
-  const renderActivityItem = (act: JulesActivity) => {
-    if (act.userMessaged) {
-      return (
-        <View key={act.id} style={[styles.msgRow, styles.msgUser]}>
-          <Text style={styles.msgLabel}>You</Text>
-          <Text style={styles.msgText}>{act.userMessaged.userMessage}</Text>
-        </View>
-      );
-    }
-
-    if (act.agentMessaged) {
-      return (
-        <View key={act.id} style={[styles.msgRow, styles.msgAgent]}>
-          <Text style={styles.msgLabelAgent}>Jules</Text>
-          <Text style={styles.msgTextAgent}>{act.agentMessaged.agentMessage}</Text>
-        </View>
-      );
-    }
-
-    if (act.planGenerated) {
-      const plan = act.planGenerated.plan;
-      return (
-        <View key={act.id} style={styles.planCard}>
-          <Text style={styles.planTitle}>📋 Proposed Development Plan</Text>
-          {plan.steps.map((step) => (
-            <View key={step.id} style={styles.stepItem}>
-              <Text style={styles.stepIndex}>{step.index + 1}. {step.title}</Text>
-              <Text style={styles.stepDesc}>{step.description}</Text>
-            </View>
-          ))}
-        </View>
-      );
-    }
-
-    if (act.progressUpdated) {
-      const progressTitle = act.progressUpdated.title || 'Task in Progress';
-      const progressDesc = act.progressUpdated.description || act.description;
-
-      return (
-        <View key={act.id} style={styles.progressCard}>
-          <Text style={styles.progressTitle}>⚡ Progress: {progressTitle}</Text>
-          {progressDesc ? <Text style={styles.progressDesc}>{progressDesc}</Text> : null}
-        </View>
-      );
-    }
-
-    if (act.sessionFailed) {
-      return (
-        <View key={act.id} style={styles.failedCard}>
-          <Text style={styles.failedTitle}>❌ Session Failed</Text>
-          <Text style={styles.failedDesc}>{act.sessionFailed.reason}</Text>
-        </View>
-      );
-    }
-
-    // Default fallback: if the activity has a description, render it as a status card to prevent empty progress boxes
-    if (act.description) {
-      return (
-        <View key={act.id} style={styles.statusCardFallback}>
-          <Text style={styles.statusCardTextFallback}>⚙️ {act.description}</Text>
-        </View>
-      );
-    }
-
-    return null;
   };
 
   // Poll for APK build completion in the background when buildTargetCommitSha is active
@@ -420,42 +290,110 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       }
     };
 
-    // Run immediately on mount/update
     checkApk();
-
     const interval = setInterval(checkApk, 10000); // Check every 10 seconds
-
     return () => clearInterval(interval);
   }, [buildTargetCommitSha, buildApkAsset, selectedRepo.owner.login, selectedRepo.name]);
 
-  // Combined chronological feed of API activities and local merge statuses
-  // We use index preservation to prevent Hermes/JSC unstable sorting from scrambling the feed.
-  const combinedFeed = [
-    ...activities.map((act, idx) => ({ ...act, originalIdx: idx, isLocalMergeStatus: false })),
-    ...localMergeStatuses.map(status => ({
-      id: status.id,
-      originalIdx: 999999,
-      isLocalMergeStatus: true,
-      description: status.text,
-      createTime: status.createTime,
-    }))
-  ].sort((a, b) => {
-    if (a.isLocalMergeStatus && b.isLocalMergeStatus) {
-      return new Date(a.createTime).getTime() - new Date(b.createTime).getTime();
-    }
-    if (a.isLocalMergeStatus || b.isLocalMergeStatus) {
-      const timeA = new Date(a.createTime).getTime();
-      const timeB = new Date(b.createTime).getTime();
-      if (timeA !== timeB) {
-        return timeA - timeB;
-      }
-    }
-    return (a.originalIdx || 0) - (b.originalIdx || 0);
-  });
+  const renderStatusBanner = () => {
+    const latestStatusMsg = localMergeStatuses.length > 0
+      ? localMergeStatuses[localMergeStatuses.length - 1].text
+      : 'Integrating development branch via rebase...';
 
-  const lastLocalMergeIdx = combinedFeed.map(item => !!item.isLocalMergeStatus).lastIndexOf(true);
+    if (buildApkAsset) {
+      return (
+        <View style={styles.bannerReady}>
+          <View style={styles.bannerHeader}>
+            <Text style={styles.bannerTitleReady}>📦 APK Build Success!</Text>
+            <Text style={styles.bannerMetaReady}>
+              Commit: {buildTargetCommitSha?.substring(0, 7)}
+            </Text>
+          </View>
+          <Text style={styles.bannerDescReady}>
+            Your signed Android APK is compiled and ready for download.
+          </Text>
+          <View style={styles.bannerButtonsRow}>
+            <TouchableOpacity
+              style={styles.bannerBtnDownload}
+              onPress={async () => {
+                try {
+                  const supported = await Linking.canOpenURL(buildApkAsset.browser_download_url);
+                  if (supported) {
+                    await Linking.openURL(buildApkAsset.browser_download_url);
+                  } else {
+                    Alert.alert('Error', `Cannot open download URL: ${buildApkAsset.browser_download_url}`);
+                  }
+                } catch (e: any) {
+                  Alert.alert('Download Failed', e.message);
+                }
+              }}
+            >
+              <Text style={styles.bannerBtnDownloadText}>Install / Download APK</Text>
+            </TouchableOpacity>
 
-  // If no session active, show creation panel
+            <TouchableOpacity
+              style={styles.bannerBtnCopy}
+              onPress={async () => {
+                await ClipboardExpo.setStringAsync(buildApkAsset.browser_download_url);
+                Alert.alert('Copied!', 'APK Download URL copied to clipboard.');
+              }}
+            >
+              <Text style={styles.bannerBtnCopyText}>📋 Copy Link</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      );
+    }
+
+    if (buildTargetCommitSha) {
+      return (
+        <View style={styles.bannerCompiling}>
+          <View style={styles.bannerHeader}>
+            <Text style={styles.bannerTitleCompiling}>⚙️ Pipeline: Compiling APK...</Text>
+            <ActivityIndicator size="small" color="#f59e0b" style={{ marginLeft: 8 }} />
+          </View>
+          <Text style={styles.bannerDescCompiling}>
+            Rebase merge complete! Standalone APK is compiling (typically 3-5 mins).
+          </Text>
+          {onViewBuildProgress && (
+            <TouchableOpacity style={styles.bannerBtnProgress} onPress={onViewBuildProgress}>
+              <Text style={styles.bannerBtnProgressText}>🚀 View APK Build Progress</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      );
+    }
+
+    return (
+      <View style={styles.bannerIntegrating}>
+        <View style={styles.bannerHeader}>
+          <Text style={styles.bannerTitleIntegrating}>⚙️ Integrating Code...</Text>
+          <ActivityIndicator size="small" color="#3b82f6" style={{ marginLeft: 8 }} />
+        </View>
+        <Text style={styles.bannerDescIntegrating}>{latestStatusMsg}</Text>
+      </View>
+    );
+  };
+
+  const getStatusColor = (state: string) => {
+    switch (state) {
+      case 'QUEUED':
+        return '#f59e0b';
+      case 'PLANNING':
+      case 'IN_PROGRESS':
+        return '#3b82f6';
+      case 'AWAITING_PLAN_APPROVAL':
+        return '#ec4899';
+      case 'COMPLETED':
+        return '#10b981';
+      case 'FAILED':
+        return '#ef4444';
+      default:
+        return '#9ca3af';
+    }
+  };
+
+  // If no session active, show launch panel
   if (!session) {
     return (
       <KeyboardAvoidingView
@@ -502,10 +440,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   }
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      style={styles.container}
-    >
+    <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={onBack} style={{ width: 60 }}>
@@ -521,130 +456,25 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
         <View style={{ width: 60 }} />
       </View>
 
-      {/* Chat Area */}
-      <ScrollView
-        ref={scrollRef}
-        style={styles.chatArea}
-        contentContainerStyle={{ padding: 16 }}
-        onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
-      >
-        <View style={styles.systemBanner}>
-          <Text style={styles.systemBannerText}>
-            🤖 Autonomous session created. Jules is analyzing your repo and planning scaffolding.
-          </Text>
-        </View>
-
-        {combinedFeed.map((item, idx) => {
-          if (item.isLocalMergeStatus) {
-            const isLastLocalMerge = idx === lastLocalMergeIdx;
-
-            // If this is the last integration message, and we are either building or have a ready APK, we show the customized cards!
-            if (isLastLocalMerge && buildApkAsset) {
-              return (
-                <View key={item.id} style={styles.mergeStatusCardReady}>
-                  <Text style={styles.mergeStatusTitleReady}>📦 APK Build Success!</Text>
-                  <Text style={styles.mergeStatusDescReady}>
-                    Your standalone, test-key signed Android APK is ready!
-                  </Text>
-
-                  <TouchableOpacity
-                    style={styles.chatBuildBtnReady}
-                    onPress={async () => {
-                      try {
-                        const supported = await Linking.canOpenURL(buildApkAsset.browser_download_url);
-                        if (supported) {
-                          await Linking.openURL(buildApkAsset.browser_download_url);
-                        } else {
-                          Alert.alert('Error', `Cannot open download URL: ${buildApkAsset.browser_download_url}`);
-                        }
-                      } catch (e: any) {
-                        Alert.alert('Download Failed', e.message);
-                      }
-                    }}
-                  >
-                    <Text style={styles.chatBuildBtnTextReady}>Install / Download APK</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={styles.chatCopyBtnReady}
-                    onPress={async () => {
-                      await ClipboardExpo.setStringAsync(buildApkAsset.browser_download_url);
-                      Alert.alert('Copied!', 'APK Download URL copied to clipboard.');
-                    }}
-                  >
-                    <Text style={styles.chatCopyBtnTextReady}>📋 Copy APK Download Link</Text>
-                  </TouchableOpacity>
-
-                  <Text style={styles.apkMetaReady}>
-                    File: {buildApkAsset.name} (Commit: {buildTargetCommitSha?.substring(0, 7)})
-                  </Text>
-                </View>
-              );
-            }
-
-            if (isLastLocalMerge && buildTargetCommitSha) {
-              return (
-                <View key={item.id} style={styles.mergeStatusCardCompiling}>
-                  <Text style={styles.mergeStatusTitleCompiling}>⚙️ Integration Status: Compiling APK...</Text>
-                  <Text style={styles.mergeStatusDescCompiling}>
-                    Rebase merge complete! Standalone production APK is compiling in the background. (Typically takes 3 to 5 minutes)
-                  </Text>
-                  {onViewBuildProgress && (
-                    <TouchableOpacity style={[styles.chatBuildBtnCompiling, { marginTop: 12 }]} onPress={onViewBuildProgress}>
-                      <Text style={styles.chatBuildBtnTextCompiling}>🚀 View APK Build Progress</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-              );
-            }
-
-            // Otherwise, render normal static status card
-            return (
-              <View key={item.id} style={styles.mergeStatusCard}>
-                <Text style={styles.mergeStatusTitle}>⚙️ Integration Status</Text>
-                <Text style={styles.mergeStatusDesc}>{item.description}</Text>
-              </View>
-            );
-          } else {
-            return renderActivityItem(item as unknown as JulesActivity);
-          }
-        })}
-      </ScrollView>
-
-      {/* Input bar */}
-      <View style={styles.inputBar}>
-        <TextInput
-          style={styles.chatInput}
-          placeholder="Send Jules a message..."
-          placeholderTextColor="#888"
-          value={message}
-          onChangeText={setMessage}
-          editable={!submitting}
+      {/* Embedded Jules Chat Webview */}
+      <View style={styles.webViewContainer}>
+        <WebView
+          source={{ uri: session.url }}
+          style={styles.webView}
+          startInLoadingState={true}
+          renderLoading={() => (
+            <View style={styles.webViewLoading}>
+              <ActivityIndicator size="large" color="#6200ee" />
+              <Text style={styles.webViewLoadingText}>Loading Jules session...</Text>
+            </View>
+          )}
         />
-        <TouchableOpacity style={styles.sendBtn} onPress={handleSendMessage} disabled={submitting}>
-          {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.sendBtnText}>Send</Text>}
-        </TouchableOpacity>
       </View>
-    </KeyboardAvoidingView>
-  );
-};
 
-const getStatusColor = (state: string) => {
-  switch (state) {
-    case 'QUEUED':
-      return '#f59e0b';
-    case 'PLANNING':
-    case 'IN_PROGRESS':
-      return '#3b82f6';
-    case 'AWAITING_PLAN_APPROVAL':
-      return '#ec4899';
-    case 'COMPLETED':
-      return '#10b981';
-    case 'FAILED':
-      return '#ef4444';
-    default:
-      return '#9ca3af';
-  }
+      {/* Status Banner */}
+      {hasAttemptedMerge && renderStatusBanner()}
+    </View>
+  );
 };
 
 const styles = StyleSheet.create({
@@ -674,19 +504,6 @@ const styles = StyleSheet.create({
   headerMeta: {
     alignItems: 'center',
     flex: 1,
-  },
-  refreshHeaderBtn: {
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    backgroundColor: '#1c1c1f',
-    borderWidth: 1,
-    borderColor: '#2e2e33',
-    borderRadius: 6,
-  },
-  refreshHeaderText: {
-    color: '#3b82f6',
-    fontSize: 12,
-    fontWeight: 'bold',
   },
   statusRow: {
     flexDirection: 'row',
@@ -747,356 +564,139 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
   },
-  chatArea: {
+  webViewContainer: {
     flex: 1,
   },
-  systemBanner: {
-    backgroundColor: '#1c1c1f',
-    borderColor: '#2e2e33',
-    borderWidth: 1,
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 16,
+  webView: {
+    flex: 1,
+    backgroundColor: '#121214',
   },
-  systemBannerText: {
+  webViewLoading: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: '#121214',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 999,
+  },
+  webViewLoadingText: {
     color: '#a0a0ab',
-    fontSize: 13,
-    lineHeight: 18,
-    textAlign: 'center',
+    marginTop: 12,
+    fontSize: 14,
   },
-  msgRow: {
-    maxWidth: '85%',
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 12,
-  },
-  msgUser: {
-    backgroundColor: '#6200ee',
-    alignSelf: 'flex-end',
-  },
-  msgAgent: {
-    backgroundColor: '#1c1c1f',
-    borderWidth: 1,
-    borderColor: '#2e2e33',
-    alignSelf: 'flex-start',
-  },
-  msgLabel: {
-    color: '#c084fc',
-    fontWeight: 'bold',
-    fontSize: 11,
-    marginBottom: 4,
-  },
-  msgLabelAgent: {
-    color: '#6200ee',
-    fontWeight: 'bold',
-    fontSize: 11,
-    marginBottom: 4,
-  },
-  msgText: {
-    color: '#fff',
-    fontSize: 15,
-    lineHeight: 20,
-  },
-  msgTextAgent: {
-    color: '#fff',
-    fontSize: 15,
-    lineHeight: 20,
-  },
-  planCard: {
-    backgroundColor: '#1c1c1f',
-    borderWidth: 1,
-    borderColor: '#ec4899',
-    borderRadius: 12,
+  bannerReady: {
+    backgroundColor: '#142a1f',
+    borderTopWidth: 2,
+    borderColor: '#10b981',
     padding: 16,
-    marginBottom: 16,
+    paddingBottom: Platform.OS === 'android' ? 24 : 16,
   },
-  planTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 12,
-  },
-  stepItem: {
-    marginBottom: 10,
-    borderLeftWidth: 2,
-    borderColor: '#e879f9',
-    paddingLeft: 12,
-  },
-  stepIndex: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#fff',
-  },
-  stepDesc: {
-    fontSize: 12,
-    color: '#a0a0ab',
-    marginTop: 2,
-  },
-  approveBtn: {
-    backgroundColor: '#ec4899',
-    borderRadius: 8,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 16,
-  },
-  approveBtnText: {
-    color: '#fff',
-    fontWeight: 'bold',
-    fontSize: 14,
-  },
-  approvedBadge: {
-    backgroundColor: 'rgba(16, 185, 129, 0.1)',
-    borderRadius: 8,
-    paddingVertical: 10,
-    alignItems: 'center',
-    marginTop: 16,
-    borderWidth: 1,
-    borderColor: '#10b981',
+  bannerHeader: {
     flexDirection: 'row',
-    justifyContent: 'center',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
   },
-  approvedBadgeText: {
+  bannerTitleReady: {
     color: '#10b981',
-    fontWeight: 'bold',
-  },
-  planningBadge: {
-    backgroundColor: 'rgba(245, 158, 11, 0.1)',
-    borderRadius: 8,
-    paddingVertical: 10,
-    alignItems: 'center',
-    marginTop: 16,
-    borderWidth: 1,
-    borderColor: '#f59e0b',
-    flexDirection: 'row',
-    justifyContent: 'center',
-  },
-  planningBadgeText: {
-    color: '#f59e0b',
-    fontWeight: 'bold',
-  },
-  progressCard: {
-    backgroundColor: 'rgba(59, 130, 246, 0.1)',
-    borderWidth: 1,
-    borderColor: '#3b82f6',
-    borderRadius: 10,
-    padding: 14,
-    marginBottom: 12,
-  },
-  progressTitle: {
-    color: '#3b82f6',
-    fontWeight: 'bold',
-    fontSize: 14,
-    marginBottom: 4,
-  },
-  progressDesc: {
-    color: '#a0a0ab',
-    fontSize: 12,
-    lineHeight: 18,
-  },
-  completedCard: {
-    backgroundColor: 'rgba(16, 185, 129, 0.1)',
-    borderWidth: 1,
-    borderColor: '#10b981',
-    borderRadius: 10,
-    padding: 14,
-    marginBottom: 12,
-  },
-  completedTitle: {
-    color: '#10b981',
-    fontWeight: 'bold',
-    fontSize: 14,
-    marginBottom: 4,
-  },
-  completedDesc: {
-    color: '#a0a0ab',
-    fontSize: 12,
-    marginBottom: 12,
-  },
-  chatBuildBtn: {
-    backgroundColor: '#10b981',
-    borderRadius: 8,
-    height: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 6,
-  },
-  chatBuildBtnText: {
-    color: '#fff',
-    fontWeight: 'bold',
-    fontSize: 13,
-  },
-  failedCard: {
-    backgroundColor: 'rgba(239, 68, 68, 0.1)',
-    borderWidth: 1,
-    borderColor: '#ef4444',
-    borderRadius: 10,
-    padding: 14,
-    marginBottom: 12,
-  },
-  failedTitle: {
-    color: '#ef4444',
-    fontWeight: 'bold',
-    fontSize: 14,
-    marginBottom: 4,
-  },
-  failedDesc: {
-    color: '#a0a0ab',
-    fontSize: 12,
-  },
-  inputBar: {
-    borderTopWidth: 1,
-    borderColor: '#1e1e24',
-    padding: 12,
-    paddingBottom: Platform.OS === 'android' ? 18 : 12, // Extra breathing room for gesture navigation
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#121214',
-  },
-  chatInput: {
-    flex: 1,
-    backgroundColor: '#1c1c1f',
-    borderRadius: 8,
-    color: '#fff',
-    height: 44,
-    paddingHorizontal: 16,
-    marginRight: 10,
-  },
-  sendBtn: {
-    backgroundColor: '#6200ee',
-    borderRadius: 8,
-    height: 44,
-    paddingHorizontal: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  sendBtnText: {
-    color: '#fff',
-    fontWeight: 'bold',
-  },
-  statusCardFallback: {
-    backgroundColor: '#1c1c1f',
-    borderColor: '#2e2e33',
-    borderWidth: 1,
-    borderRadius: 8,
-    padding: 10,
-    marginBottom: 12,
-    alignSelf: 'stretch',
-  },
-  statusCardTextFallback: {
-    color: '#a0a0ab',
-    fontSize: 13,
-    lineHeight: 18,
-  },
-  mergeStatusCard: {
-    backgroundColor: 'rgba(245, 158, 11, 0.1)',
-    borderWidth: 1,
-    borderColor: '#f59e0b',
-    borderRadius: 10,
-    padding: 14,
-    marginBottom: 12,
-    alignSelf: 'stretch',
-  },
-  mergeStatusTitle: {
-    color: '#f59e0b',
-    fontWeight: 'bold',
-    fontSize: 14,
-    marginBottom: 4,
-  },
-  mergeStatusDesc: {
-    color: '#a0a0ab',
-    fontSize: 12,
-    lineHeight: 18,
-  },
-  mergeStatusCardReady: {
-    backgroundColor: 'rgba(16, 185, 129, 0.1)',
-    borderWidth: 2,
-    borderColor: '#10b981',
-    borderRadius: 12,
-    padding: 18,
-    marginBottom: 12,
-    alignSelf: 'stretch',
-    shadowColor: '#10b981',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    elevation: 3,
-  },
-  mergeStatusTitleReady: {
-    color: '#10b981',
-    fontWeight: 'bold',
-    fontSize: 16,
-    marginBottom: 6,
-  },
-  mergeStatusDescReady: {
-    color: '#a0a0ab',
-    fontSize: 13,
-    lineHeight: 18,
-    marginBottom: 16,
-  },
-  chatBuildBtnReady: {
-    backgroundColor: '#10b981',
-    borderRadius: 8,
-    height: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 10,
-  },
-  chatBuildBtnTextReady: {
-    color: '#fff',
     fontWeight: 'bold',
     fontSize: 15,
   },
-  chatCopyBtnReady: {
-    borderWidth: 1,
-    borderColor: '#2e2e33',
-    backgroundColor: '#121214',
-    borderRadius: 8,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
-  },
-  chatCopyBtnTextReady: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: 'bold',
-  },
-  apkMetaReady: {
+  bannerMetaReady: {
     color: '#71717a',
     fontSize: 11,
-    textAlign: 'center',
   },
-  mergeStatusCardCompiling: {
-    backgroundColor: 'rgba(245, 158, 11, 0.1)',
-    borderWidth: 1,
-    borderColor: '#f59e0b',
-    borderRadius: 10,
-    padding: 14,
-    marginBottom: 12,
-    alignSelf: 'stretch',
-  },
-  mergeStatusTitleCompiling: {
-    color: '#f59e0b',
-    fontWeight: 'bold',
-    fontSize: 14,
-    marginBottom: 4,
-  },
-  mergeStatusDescCompiling: {
+  bannerDescReady: {
     color: '#a0a0ab',
     fontSize: 12,
-    lineHeight: 18,
+    lineHeight: 16,
+    marginBottom: 12,
   },
-  chatBuildBtnCompiling: {
-    backgroundColor: '#f59e0b',
-    borderRadius: 8,
-    height: 40,
+  bannerButtonsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  bannerBtnDownload: {
+    backgroundColor: '#10b981',
+    borderRadius: 6,
+    height: 38,
+    flex: 2,
     alignItems: 'center',
     justifyContent: 'center',
+    marginRight: 8,
   },
-  chatBuildBtnTextCompiling: {
+  bannerBtnDownloadText: {
     color: '#fff',
     fontWeight: 'bold',
     fontSize: 13,
+  },
+  bannerBtnCopy: {
+    borderWidth: 1,
+    borderColor: '#2e2e33',
+    backgroundColor: '#121214',
+    borderRadius: 6,
+    height: 38,
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bannerBtnCopyText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  bannerCompiling: {
+    backgroundColor: '#272015',
+    borderTopWidth: 2,
+    borderColor: '#f59e0b',
+    padding: 16,
+    paddingBottom: Platform.OS === 'android' ? 24 : 16,
+  },
+  bannerTitleCompiling: {
+    color: '#f59e0b',
+    fontWeight: 'bold',
+    fontSize: 15,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  bannerDescCompiling: {
+    color: '#a0a0ab',
+    fontSize: 12,
+    lineHeight: 16,
+    marginBottom: 10,
+  },
+  bannerBtnProgress: {
+    backgroundColor: '#f59e0b',
+    borderRadius: 6,
+    height: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bannerBtnProgressText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 13,
+  },
+  bannerIntegrating: {
+    backgroundColor: '#151d2a',
+    borderTopWidth: 2,
+    borderColor: '#3b82f6',
+    padding: 16,
+    paddingBottom: Platform.OS === 'android' ? 24 : 16,
+  },
+  bannerTitleIntegrating: {
+    color: '#3b82f6',
+    fontWeight: 'bold',
+    fontSize: 15,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  bannerDescIntegrating: {
+    color: '#a0a0ab',
+    fontSize: 12,
+    lineHeight: 16,
   },
 });
