@@ -14,6 +14,7 @@ interface IntegrationScreenProps {
   githubService: GitHubService;
   selectedRepo: GitHubRepo;
   onMergeComplete: (commitSha: string) => void;
+  onFixMergeConflict: (msg: string) => void;
   onBack: () => void;
 }
 
@@ -28,12 +29,13 @@ export const IntegrationScreen: React.FC<IntegrationScreenProps> = ({
   githubService,
   selectedRepo,
   onMergeComplete,
+  onFixMergeConflict,
   onBack,
 }) => {
   const [steps, setSteps] = useState<StepStatus[]>([
     { id: '1', label: 'Discovering development branch...', state: 'pending' },
     { id: '2', label: 'Checking and creating Pull Request...', state: 'pending' },
-    { id: '3', label: 'Performing fast-forward rebase merge...', state: 'pending' },
+    { id: '3', label: 'Performing regular merge...', state: 'pending' },
     { id: '4', label: 'Cleaning up development branch...', state: 'pending' },
     { id: '5', label: 'Retrieving latest merge commit SHA...', state: 'pending' },
   ]);
@@ -59,7 +61,7 @@ export const IntegrationScreen: React.FC<IntegrationScreenProps> = ({
     setSteps([
       { id: '1', label: 'Discovering development branch...', state: 'running' },
       { id: '2', label: 'Checking and creating Pull Request...', state: 'pending' },
-      { id: '3', label: 'Performing fast-forward rebase merge...', state: 'pending' },
+      { id: '3', label: 'Performing regular merge...', state: 'pending' },
       { id: '4', label: 'Cleaning up development branch...', state: 'pending' },
       { id: '5', label: 'Retrieving latest merge commit SHA...', state: 'pending' },
     ]);
@@ -113,14 +115,14 @@ export const IntegrationScreen: React.FC<IntegrationScreenProps> = ({
       }
       updateStepState('2', 'success');
 
-      // Step 3: Rebase Merge
+      // Step 3: Regular Merge
       updateStepState('3', 'running');
       const prNumber = pr.number;
       await githubService.mergePullRequest(
         selectedRepo.owner.login,
         selectedRepo.name,
         prNumber,
-        'rebase'
+        'merge'
       );
       updateStepState('3', 'success');
 
@@ -240,6 +242,13 @@ export const IntegrationScreen: React.FC<IntegrationScreenProps> = ({
 
             <TouchableOpacity style={styles.retryBtn} onPress={startIntegration}>
               <Text style={styles.retryBtnText}>🔄 Retry Integration</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.actionBtn, { backgroundColor: '#6200ee', marginTop: 12 }]}
+              onPress={() => onFixMergeConflict("The branch integration failed due to a merge conflict. Please resolve the merge conflict against the default branch and rebuild.")}
+            >
+              <Text style={styles.actionBtnText}>💬 Fix Merge Conflict with Jules</Text>
             </TouchableOpacity>
           </View>
         ) : null}

@@ -27,6 +27,8 @@ interface ChatScreenProps {
   selectedRepo: GitHubRepo;
   initialSessionId?: string | null;
   hasExistingSessions?: boolean;
+  initialMessage?: string | null;
+  onClearInitialMessage?: () => void;
   onSessionStarted: (sessionId: string) => void;
   onSessionStateFetched?: (state: string) => void;
   onViewBuildProgress?: () => void;
@@ -40,6 +42,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   selectedRepo,
   initialSessionId,
   hasExistingSessions,
+  initialMessage,
+  onClearInitialMessage,
   onSessionStarted,
   onSessionStateFetched,
   onViewBuildProgress,
@@ -54,6 +58,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   const [mergedBranches, setMergedBranches] = useState<Record<string, boolean>>({});
   const [failedMessages, setFailedMessages] = useState<Array<{ id: string; text: string; createTime: string }>>([]);
   const [jsonModalVisible, setJsonModalVisible] = useState(false);
+  const [selectedActivityJson, setSelectedActivityJson] = useState<string | null>(null);
   const [hasAttemptedMerge, setHasAttemptedMerge] = useState(false);
   const [buildTargetCommitSha, setBuildTargetCommitSha] = useState<string | null>(null);
   const [buildApkAsset, setBuildApkAsset] = useState<any | null>(null);
@@ -181,11 +186,9 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     }
   };
 
-  const handleSendMessage = async () => {
-    if (!message.trim() || !session) return;
+  const handleSendDirectMessage = async (textToSend: string) => {
+    if (!session) return;
     setSubmitting(true);
-    const textToSend = message.trim();
-    setMessage('');
     try {
       await julesService.sendMessage(session.id, textToSend);
 
@@ -210,6 +213,24 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       setSubmitting(false);
     }
   };
+
+  const handleSendMessage = async () => {
+    if (!message.trim() || !session) return;
+    const textToSend = message.trim();
+    setMessage('');
+    await handleSendDirectMessage(textToSend);
+  };
+
+  // Auto-send initial message (like a merge conflict fix prompt) once session is ready
+  useEffect(() => {
+    if (initialMessage && session && !submitting) {
+      logger.info(`ChatScreen: Auto-sending initial conflict fix message: ${initialMessage}`);
+      handleSendDirectMessage(initialMessage);
+      if (onClearInitialMessage) {
+        onClearInitialMessage();
+      }
+    }
+  }, [initialMessage, session]);
 
   const handleRetryMessage = async (failedId: string, text: string) => {
     if (!session) return;
@@ -253,6 +274,17 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     }
   };
 
+  const renderJsonButton = (activity: JulesActivity) => {
+    return (
+      <TouchableOpacity
+        style={styles.activityJsonBtn}
+        onPress={() => setSelectedActivityJson(JSON.stringify(activity, null, 2))}
+      >
+        <Text style={styles.activityJsonBtnText}>{} JSON</Text>
+      </TouchableOpacity>
+    );
+  };
+
   // Helper to render activity logs/messages
   const renderActivityItem = (act: JulesActivity, isLastMessage = true) => {
     if (act.userMessaged) {
@@ -267,8 +299,11 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     if (act.agentMessaged) {
       return (
         <View key={act.id} style={[styles.msgRow, styles.msgAgent]}>
-          <Text style={styles.msgLabelAgent}>Jules</Text>
-          <Text style={styles.msgTextAgent}>{act.agentMessaged.agentMessage}</Text>
+          <View style={styles.msgHeaderRow}>
+            <Text selectable style={styles.msgLabelAgent}>Jules</Text>
+            {renderJsonButton(act)}
+          </View>
+          <Text selectable style={styles.msgTextAgent}>{act.agentMessaged.agentMessage}</Text>
         </View>
       );
     }
@@ -277,11 +312,14 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       const plan = act.planGenerated.plan;
       return (
         <View key={act.id} style={styles.planCard}>
-          <Text style={styles.planTitle}>📋 Proposed Development Plan</Text>
+          <View style={styles.msgHeaderRow}>
+            <Text selectable style={styles.planTitle}>📋 Proposed Development Plan</Text>
+            {renderJsonButton(act)}
+          </View>
           {plan.steps.map((step, idx) => (
             <View key={step.id} style={styles.stepItem}>
-              <Text style={styles.stepIndex}>{idx + 1}. {step.title}</Text>
-              <Text style={styles.stepDesc}>{step.description}</Text>
+              <Text selectable style={styles.stepIndex}>{idx + 1}. {step.title}</Text>
+              <Text selectable style={styles.stepDesc}>{step.description}</Text>
             </View>
           ))}
         </View>
@@ -294,8 +332,32 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
 
       return (
         <View key={act.id} style={styles.progressCard}>
-          <Text style={styles.progressTitle}>⚡ Progress: {progressTitle}</Text>
-          {progressDesc ? <Text style={styles.progressDesc}>{progressDesc}</Text> : null}
+          <View style={styles.msgHeaderRow}>
+            <Text selectable style={styles.progressTitle}>⚡ Progress: {progressTitle}</Text>
+            {renderJsonButton(act)}
+          </View>
+          {progressDesc ? <Text selectable style={styles.progressDesc}>{progressDesc}</Text> : null}
+        </View>
+      );
+    }
+
+    if (act.sessionCompleted) {
+      return (
+        <View key={act.id} style={styles.completedCard}>
+          <View style={styles.msgHeaderRow}>
+            <Text selectable style={styles.completedTitle}>🎉 Task Completed!</Text>
+            {renderJsonButton(act)}
+          </View>
+          <Text selectable style={styles.completedDesc}>{act.description || 'Jules has successfully completed the task!'}</Text>
+          <TouchableOpacity
+            style={[styles.chatBuildBtn, !isLastMessage && { backgroundColor: '#2e2e33' }]}
+            onPress={onStartIntegration}
+            disabled={!isLastMessage}
+          >
+            <Text style={[styles.chatBuildBtnText, !isLastMessage && { color: '#71717a' }]}>
+              {isLastMessage ? '🚀 Integrate Code & View APK' : 'Integrate Code (Disabled - Newer message exists)'}
+            </Text>
+          </TouchableOpacity>
         </View>
       );
     }
@@ -321,8 +383,11 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     if (act.sessionFailed) {
       return (
         <View key={act.id} style={styles.failedCard}>
-          <Text style={styles.failedTitle}>❌ Session Failed</Text>
-          <Text style={styles.failedDesc}>{act.sessionFailed.reason}</Text>
+          <View style={styles.msgHeaderRow}>
+            <Text selectable style={styles.failedTitle}>❌ Session Failed</Text>
+            {renderJsonButton(act)}
+          </View>
+          <Text selectable style={styles.failedDesc}>{act.sessionFailed.reason}</Text>
         </View>
       );
     }
@@ -331,7 +396,10 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     if (act.description) {
       return (
         <View key={act.id} style={styles.statusCardFallback}>
-          <Text style={styles.statusCardTextFallback}>⚙️ {act.description}</Text>
+          <View style={styles.msgHeaderRow}>
+            <Text selectable style={styles.statusCardTextFallback}>⚙️ {act.description}</Text>
+            {renderJsonButton(act)}
+          </View>
         </View>
       );
     }
@@ -462,8 +530,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
             <Text style={styles.statusLabel}>{session.state}</Text>
           </View>
         </View>
-        <TouchableOpacity style={styles.jsonHeaderBtn} onPress={() => setJsonModalVisible(true)}>
-          <Text style={styles.jsonHeaderBtnText}>API JSON</Text>
+        <TouchableOpacity style={styles.jsonHeaderBtn} onPress={onViewBuildProgress}>
+          <Text style={styles.jsonHeaderBtnText}>📦 View Build</Text>
         </TouchableOpacity>
       </View>
 
@@ -518,31 +586,25 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
         </TouchableOpacity>
       </View>
 
-      {/* Modal to view Raw Jules Session/Activities JSON */}
+      {/* Modal to view Raw Jules Activity JSON */}
       <Modal
-        visible={jsonModalVisible}
+        visible={!!selectedActivityJson}
         animationType="slide"
         transparent
-        onRequestClose={() => setJsonModalVisible(false)}
+        onRequestClose={() => setSelectedActivityJson(null)}
       >
         <View style={styles.jsonOverlay}>
           <View style={styles.jsonContainer}>
             <View style={styles.jsonHeader}>
-              <Text style={styles.jsonTitle}>🛠️ Jules API Response Payload</Text>
-              <TouchableOpacity style={styles.closeJsonBtn} onPress={() => setJsonModalVisible(false)}>
+              <Text style={styles.jsonTitle}>🛠️ Raw Activity JSON</Text>
+              <TouchableOpacity style={styles.closeJsonBtn} onPress={() => setSelectedActivityJson(null)}>
                 <Text style={styles.closeJsonBtnText}>✕ Close</Text>
               </TouchableOpacity>
             </View>
 
             <ScrollView style={styles.jsonScroll}>
-              <Text style={styles.sectionTitleHeader}>Session Object:</Text>
               <Text selectable style={styles.jsonTextCode}>
-                {JSON.stringify(session, null, 2)}
-              </Text>
-
-              <Text style={[styles.sectionTitleHeader, { marginTop: 20 }]}>Activities ({activities.length}):</Text>
-              <Text selectable style={styles.jsonTextCode}>
-                {JSON.stringify(activities, null, 2)}
+                {selectedActivityJson}
               </Text>
             </ScrollView>
 
@@ -551,15 +613,16 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                 style={styles.copyJsonBtn}
                 onPress={async () => {
                   try {
-                    const fullPayload = JSON.stringify({ session, activities }, null, 2);
-                    await ClipboardExpo.setStringAsync(fullPayload);
-                    Alert.alert('Success', 'Jules API payload copied to clipboard!');
+                    if (selectedActivityJson) {
+                      await ClipboardExpo.setStringAsync(selectedActivityJson);
+                      Alert.alert('Success', 'Activity JSON copied to clipboard!');
+                    }
                   } catch (e: any) {
                     Alert.alert('Copy Failed', e.message);
                   }
                 }}
               >
-                <Text style={styles.copyJsonBtnText}>Copy Raw Payload</Text>
+                <Text style={styles.copyJsonBtnText}>Copy Activity JSON</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -741,6 +804,26 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 15,
     lineHeight: 20,
+  },
+  msgHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+    width: '100%',
+  },
+  activityJsonBtn: {
+    paddingVertical: 3,
+    paddingHorizontal: 6,
+    backgroundColor: '#27272a',
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#3f3f46',
+  },
+  activityJsonBtnText: {
+    color: '#a1a1aa',
+    fontSize: 10,
+    fontWeight: 'bold',
   },
   msgFailedBorder: {
     borderColor: '#ef4444',

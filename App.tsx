@@ -23,6 +23,7 @@ export default function App() {
   const [selectedRepo, setSelectedRepo] = useState<GitHubRepo | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [hasExistingSessions, setHasExistingSessions] = useState<boolean>(false);
+  const [pendingMessageToSend, setPendingMessageToSend] = useState<string | null>(null);
 
   // Restore credentials on boot
   useEffect(() => {
@@ -143,6 +144,8 @@ export default function App() {
               selectedRepo={selectedRepo}
               initialSessionId={activeSessionId}
               hasExistingSessions={hasExistingSessions}
+              initialMessage={pendingMessageToSend}
+              onClearInitialMessage={() => setPendingMessageToSend(null)}
               onSessionStarted={(id) => setActiveSessionId(id)}
               onSessionStateFetched={(state) => setActiveSessionState(state)}
               onViewBuildProgress={() => setCurrentScreen('BUILD_STATUS')}
@@ -159,6 +162,10 @@ export default function App() {
             selectedRepo={selectedRepo}
             onMergeComplete={(commitSha) => {
               setCurrentScreen('BUILD_STATUS');
+            }}
+            onFixMergeConflict={(msg) => {
+              setPendingMessageToSend(msg);
+              setCurrentScreen('CHAT');
             }}
             onBack={() => setCurrentScreen('CHAT')}
           />

@@ -279,9 +279,6 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
           <Text style={styles.subtitle}>Select a thread to resume coding or start new</Text>
         </View>
         <View style={styles.headerBtns}>
-          <TouchableOpacity style={styles.logsBtn} onPress={() => setLogsVisible(true)}>
-            <Text style={styles.logsBtnText}>🪲 Logs</Text>
-          </TouchableOpacity>
           <TouchableOpacity style={styles.logoutBtn} onPress={onLogout}>
             <Text style={styles.logoutText}>Logout</Text>
           </TouchableOpacity>
