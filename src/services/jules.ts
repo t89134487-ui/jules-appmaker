@@ -218,8 +218,23 @@ export class JulesService {
    */
   async getActivities(sessionId: string): Promise<JulesActivity[]> {
     const cleanedId = sessionId.startsWith('sessions/') ? sessionId : `sessions/${sessionId}`;
-    const data = await this.fetchWithAuth(`${this.baseUrl}/${cleanedId}/activities?pageSize=100`);
-    return data.activities || [];
+    let allActivities: JulesActivity[] = [];
+    let pageToken = '';
+
+    try {
+      do {
+        const url = `${this.baseUrl}/${cleanedId}/activities?pageSize=100${pageToken ? `&pageToken=${pageToken}` : ''}`;
+        const data = await this.fetchWithAuth(url);
+        if (data.activities && data.activities.length > 0) {
+          allActivities = allActivities.concat(data.activities);
+        }
+        pageToken = data.nextPageToken || '';
+      } while (pageToken);
+    } catch (e: any) {
+      logger.error(`Failed to walk paginated activities: ${e.message}`);
+    }
+
+    return allActivities;
   }
 
   /**
