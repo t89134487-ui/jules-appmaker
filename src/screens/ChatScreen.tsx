@@ -49,6 +49,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   const [message, setMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [mergedBranches, setMergedBranches] = useState<Record<string, boolean>>({});
+  const [isMerging, setIsMerging] = useState(false);
   interface LocalMergeStatus {
     id: string;
     text: string;
@@ -85,102 +86,128 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
 
       const acts = await julesService.getActivities(id);
       setActivities(acts);
+    } catch (e: any) {
+      console.warn('Failed to poll session state', e);
+    }
+  };
 
-      // Perform direct quiet merge if Jules has completed the task
-      if (sess.state?.toUpperCase() === 'COMPLETED' && gitHubService && !hasAttemptedMerge) {
-        setHasAttemptedMerge(true);
-        try {
-          logger.info('ChatScreen: Fetching repo branches to perform direct quiet merge...');
-          addMergeStatus('Checking repository branches to integrate code...');
-          const branches = await gitHubService.getBranches(selectedRepo.owner.login, selectedRepo.name);
+  const handleMergeAndGoToApkView = async () => {
+    if (!gitHubService) {
+      Alert.alert('Error', 'GitHub Service is not initialized.');
+      return;
+    }
 
-          let matchedAnyBranch = false;
-          for (const branch of branches) {
-            const branchName = branch.name;
+    setIsMerging(true);
+    addMergeStatus('Starting on-demand branch integration...');
 
-            // Look for any branch starting with 'jules-' that is not the default branch
-            if (branchName.startsWith('jules-') && branchName !== selectedRepo.default_branch) {
-              matchedAnyBranch = true;
-              if (!mergedBranches[branchName]) {
-                logger.info(`ChatScreen: Detected completed session branch "${branchName}". Triggering PR creation & rebase merge...`);
-                addMergeStatus(`Integrating development branch "${branchName}" via rebase...`);
+    try {
+      logger.info('ChatScreen: Fetching repo branches to perform on-demand merge...');
+      addMergeStatus('Checking repository branches to integrate code...');
+      const branches = await gitHubService.getBranches(selectedRepo.owner.login, selectedRepo.name);
 
-                // Immediately mark as merged locally to prevent concurrent/duplicate API requests
-                setMergedBranches((prev) => ({ ...prev, [branchName]: true }));
+      let matchedAnyBranch = false;
+      let targetBranchName = '';
 
-                try {
-                  // Fetch open PRs to see if one already exists
-                  const openPrs = await gitHubService.getOpenPullRequests(selectedRepo.owner.login, selectedRepo.name);
-                  let pr = openPrs.find((p: any) => p.head && p.head.ref === branchName);
+      for (const branch of branches) {
+        const branchName = branch.name;
 
-                  if (!pr) {
-                    logger.info(`ChatScreen: No open PR found for branch "${branchName}". Creating new PR...`);
-                    addMergeStatus(`Creating integration Pull Request for "${branchName}"...`);
-                    pr = await gitHubService.createPullRequest(
-                      selectedRepo.owner.login,
-                      selectedRepo.name,
-                      `Merge Jules development branch "${branchName}"`,
-                      branchName,
-                      selectedRepo.default_branch
-                    );
-                  }
+        // Look for any branch starting with 'jules-' that is not the default branch
+        if (branchName.startsWith('jules-') && branchName !== selectedRepo.default_branch) {
+          matchedAnyBranch = true;
+          targetBranchName = branchName;
+          break;
+        }
+      }
 
-                  const prNumber = pr.number;
-                  logger.info(`ChatScreen: Merging PR #${prNumber} via rebase...`);
-                  addMergeStatus(`Performing fast-forward rebase merge for PR #${prNumber}...`);
+      if (!matchedAnyBranch) {
+        addMergeStatus('No active development branch found (already merged?).');
+        logger.info('ChatScreen: No active branch to merge. Navigating to APK progress...');
+        if (onViewBuildProgress) {
+          onViewBuildProgress();
+        }
+        return;
+      }
 
-                  const mergeResult = await gitHubService.mergePullRequest(
-                    selectedRepo.owner.login,
-                    selectedRepo.name,
-                    prNumber,
-                    'rebase'
-                  );
-                  logger.info(`ChatScreen: PR #${prNumber} merged successfully via rebase: ${JSON.stringify(mergeResult)}`);
-                  addMergeStatus(`Rebase merge complete! Cleaning up development branch "${branchName}"...`);
+      logger.info(`ChatScreen: Detected branch "${targetBranchName}" to merge.`);
+      addMergeStatus(`Integrating development branch "${targetBranchName}" via rebase...`);
 
-                  // Delete the branch quietly to clean up references
-                  try {
-                    await gitHubService.deleteBranch(
-                      selectedRepo.owner.login,
-                      selectedRepo.name,
-                      branchName
-                    );
-                    logger.info(`ChatScreen: Branch "${branchName}" deleted successfully quietly.`);
-                    addMergeStatus(`Integrated "${branchName}" successfully via rebase and cleaned up branch.`);
-                  } catch (deleteErr: any) {
-                    logger.warn(`ChatScreen: Quiet branch deletion failed for "${branchName}": ${deleteErr.message}`);
-                    addMergeStatus(`Integrated "${branchName}" successfully via rebase (cleanup skipped).`);
-                  }
+      // Fetch open PRs to see if one already exists
+      const openPrs = await gitHubService.getOpenPullRequests(selectedRepo.owner.login, selectedRepo.name);
+      let pr = openPrs.find((p: any) => p.head && p.head.ref === targetBranchName);
 
-                  // After successful rebase merge, fetch the latest commit of the default branch to poll the build
-                  try {
-                    const latestSha = await gitHubService.getLatestCommitSha(
-                      selectedRepo.owner.login,
-                      selectedRepo.name,
-                      selectedRepo.default_branch
-                    );
-                    logger.info(`ChatScreen: Set build target commit SHA to default branch head: ${latestSha}`);
-                    setBuildTargetCommitSha(latestSha);
-                  } catch (shaErr: any) {
-                    logger.warn(`ChatScreen: Failed to retrieve default branch latest SHA: ${shaErr.message}`);
-                  }
-                } catch (mergeErr: any) {
-                  logger.error(`ChatScreen: Rebase merge failed for branch "${branchName}": ${mergeErr.message}`);
-                  addMergeStatus(`Failed to integrate branch: ${mergeErr.message}`);
-                }
+      if (!pr) {
+        logger.info(`ChatScreen: No open PR found for branch "${targetBranchName}". Creating new PR...`);
+        addMergeStatus(`Creating integration Pull Request for "${targetBranchName}"...`);
+        pr = await gitHubService.createPullRequest(
+          selectedRepo.owner.login,
+          selectedRepo.name,
+          `Merge Jules development branch "${targetBranchName}"`,
+          targetBranchName,
+          selectedRepo.default_branch
+        );
+      }
+
+      const prNumber = pr.number;
+      logger.info(`ChatScreen: Merging PR #${prNumber} via rebase...`);
+      addMergeStatus(`Performing fast-forward rebase merge for PR #${prNumber}...`);
+
+      const mergeResult = await gitHubService.mergePullRequest(
+        selectedRepo.owner.login,
+        selectedRepo.name,
+        prNumber,
+        'rebase'
+      );
+      logger.info(`ChatScreen: PR #${prNumber} merged successfully via rebase: ${JSON.stringify(mergeResult)}`);
+      addMergeStatus(`Rebase merge complete! Cleaning up development branch "${targetBranchName}"...`);
+
+      // Delete the branch quietly to clean up references
+      try {
+        await gitHubService.deleteBranch(
+          selectedRepo.owner.login,
+          selectedRepo.name,
+          targetBranchName
+        );
+        logger.info(`ChatScreen: Branch "${targetBranchName}" deleted successfully quietly.`);
+        addMergeStatus(`Integrated "${targetBranchName}" successfully via rebase and cleaned up branch.`);
+      } catch (deleteErr: any) {
+        logger.warn(`ChatScreen: Quiet branch deletion failed for "${targetBranchName}": ${deleteErr.message}`);
+        addMergeStatus(`Integrated "${targetBranchName}" successfully via rebase (cleanup skipped).`);
+      }
+
+      // After successful rebase merge, fetch the latest commit of the default branch to poll the build
+      try {
+        const latestSha = await gitHubService.getLatestCommitSha(
+          selectedRepo.owner.login,
+          selectedRepo.name,
+          selectedRepo.default_branch
+        );
+        logger.info(`ChatScreen: Set build target commit SHA to default branch head: ${latestSha}`);
+        setBuildTargetCommitSha(latestSha);
+      } catch (shaErr: any) {
+        logger.warn(`ChatScreen: Failed to retrieve default branch latest SHA: ${shaErr.message}`);
+      }
+
+      Alert.alert(
+        'Code Integrated!',
+        'Your development branch has been successfully merged into the main branch. Standalone APK build has started in GitHub Actions!',
+        [
+          {
+            text: 'View Build Progress',
+            onPress: () => {
+              if (onViewBuildProgress) {
+                onViewBuildProgress();
               }
             }
           }
-          if (!matchedAnyBranch) {
-            addMergeStatus('Code changes are already integrated into the default branch.');
-          }
-        } catch (e: any) {
-          logger.warn(`ChatScreen: Failed to list/merge branches: ${e.message}`);
-          addMergeStatus(`Branch integration lookup failed: ${e.message}`);
-        }
-      }
+        ]
+      );
+
     } catch (e: any) {
-      console.warn('Failed to poll session state', e);
+      logger.error(`ChatScreen: Rebase merge failed: ${e.message}`);
+      addMergeStatus(`Failed to integrate branch: ${e.message}`);
+      Alert.alert('Integration Failed', `Could not merge development branch: ${e.message}`);
+    } finally {
+      setIsMerging(false);
     }
   };
 
@@ -354,9 +381,9 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       return (
         <View key={act.id} style={styles.planCard}>
           <Text style={styles.planTitle}>📋 Proposed Development Plan</Text>
-          {plan.steps.map((step) => (
+          {plan.steps.map((step, idx) => (
             <View key={step.id} style={styles.stepItem}>
-              <Text style={styles.stepIndex}>{step.index + 1}. {step.title}</Text>
+              <Text style={styles.stepIndex}>{idx + 1}. {step.title}</Text>
               <Text style={styles.stepDesc}>{step.description}</Text>
             </View>
           ))}
@@ -372,6 +399,26 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
         <View key={act.id} style={styles.progressCard}>
           <Text style={styles.progressTitle}>⚡ Progress: {progressTitle}</Text>
           {progressDesc ? <Text style={styles.progressDesc}>{progressDesc}</Text> : null}
+        </View>
+      );
+    }
+
+    if (act.sessionCompleted) {
+      return (
+        <View key={act.id} style={styles.completedCard}>
+          <Text style={styles.completedTitle}>🎉 Task Completed!</Text>
+          <Text style={styles.completedDesc}>{act.description || 'Jules has successfully completed the task!'}</Text>
+          <TouchableOpacity
+            style={styles.chatBuildBtn}
+            onPress={handleMergeAndGoToApkView}
+            disabled={isMerging}
+          >
+            {isMerging ? (
+              <ActivityIndicator color="#fff" size="small" />
+            ) : (
+              <Text style={styles.chatBuildBtnText}>🚀 Integrate Code & View APK</Text>
+            )}
+          </TouchableOpacity>
         </View>
       );
     }
@@ -573,6 +620,36 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                     }}
                   >
                     <Text style={styles.chatCopyBtnTextReady}>📋 Copy APK Download Link</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.chatBuildBtnReady, { backgroundColor: '#3b82f6', marginTop: 10 }]}
+                    onPress={async () => {
+                      const proxyUrl = `https://gh-proxy.org/${buildApkAsset.browser_download_url}`;
+                      try {
+                        const supported = await Linking.canOpenURL(proxyUrl);
+                        if (supported) {
+                          await Linking.openURL(proxyUrl);
+                        } else {
+                          Alert.alert('Error', `Cannot open download URL: ${proxyUrl}`);
+                        }
+                      } catch (e: any) {
+                        Alert.alert('Download Failed', e.message);
+                      }
+                    }}
+                  >
+                    <Text style={styles.chatBuildBtnTextReady}>⚡ Download via Proxy (gh-proxy)</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.chatCopyBtnReady, { marginTop: 10 }]}
+                    onPress={async () => {
+                      const proxyUrl = `https://gh-proxy.org/${buildApkAsset.browser_download_url}`;
+                      await ClipboardExpo.setStringAsync(proxyUrl);
+                      Alert.alert('Copied!', 'Proxy APK Download URL copied to clipboard.');
+                    }}
+                  >
+                    <Text style={styles.chatCopyBtnTextReady}>📋 Copy Proxy Download Link</Text>
                   </TouchableOpacity>
 
                   <Text style={styles.apkMetaReady}>
