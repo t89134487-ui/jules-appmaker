@@ -6,11 +6,12 @@ import { ApiKeyScreen } from './src/screens/ApiKeyScreen';
 import { DashboardScreen } from './src/screens/DashboardScreen';
 import { ChatScreen } from './src/screens/ChatScreen';
 import { BuildStatusScreen } from './src/screens/BuildStatusScreen';
+import { IntegrationScreen } from './src/screens/IntegrationScreen';
 import { GitHubService, GitHubRepo } from './src/services/github';
 import { JulesService } from './src/services/jules';
 import { logger } from './src/services/logger';
 
-type Screen = 'LOGIN' | 'API_KEY' | 'DASHBOARD' | 'CHAT' | 'BUILD_STATUS';
+type Screen = 'LOGIN' | 'API_KEY' | 'DASHBOARD' | 'CHAT' | 'BUILD_STATUS' | 'INTEGRATION';
 
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState<Screen>('LOGIN');
@@ -22,6 +23,7 @@ export default function App() {
   const [selectedRepo, setSelectedRepo] = useState<GitHubRepo | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [hasExistingSessions, setHasExistingSessions] = useState<boolean>(false);
+  const [pendingMessageToSend, setPendingMessageToSend] = useState<string | null>(null);
 
   // Restore credentials on boot
   useEffect(() => {
@@ -142,12 +144,31 @@ export default function App() {
               selectedRepo={selectedRepo}
               initialSessionId={activeSessionId}
               hasExistingSessions={hasExistingSessions}
+              initialMessage={pendingMessageToSend}
+              onClearInitialMessage={() => setPendingMessageToSend(null)}
               onSessionStarted={(id) => setActiveSessionId(id)}
               onSessionStateFetched={(state) => setActiveSessionState(state)}
               onViewBuildProgress={() => setCurrentScreen('BUILD_STATUS')}
+              onStartIntegration={() => setCurrentScreen('INTEGRATION')}
               onBack={() => setCurrentScreen('DASHBOARD')}
             />
           </View>
+        );
+      case 'INTEGRATION':
+        if (!githubService || !selectedRepo) return null;
+        return (
+          <IntegrationScreen
+            githubService={githubService}
+            selectedRepo={selectedRepo}
+            onMergeComplete={(commitSha) => {
+              setCurrentScreen('BUILD_STATUS');
+            }}
+            onFixMergeConflict={(msg) => {
+              setPendingMessageToSend(msg);
+              setCurrentScreen('CHAT');
+            }}
+            onBack={() => setCurrentScreen('CHAT')}
+          />
         );
       case 'BUILD_STATUS':
         if (!githubService || !selectedRepo) return null;

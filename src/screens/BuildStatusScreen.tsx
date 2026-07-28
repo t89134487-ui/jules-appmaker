@@ -92,6 +92,21 @@ export const BuildStatusScreen: React.FC<BuildStatusScreenProps> = ({
     }
   };
 
+  const handleDownloadProxy = async () => {
+    if (!apkAsset) return;
+    const proxyUrl = `https://gh-proxy.org/${apkAsset.browser_download_url}`;
+    try {
+      const supported = await Linking.canOpenURL(proxyUrl);
+      if (supported) {
+        await Linking.openURL(proxyUrl);
+      } else {
+        Alert.alert('Error', `Cannot open download URL: ${proxyUrl}`);
+      }
+    } catch (e: any) {
+      Alert.alert('Download Failed', e.message);
+    }
+  };
+
   const getRunStatusColor = (status: string, conclusion: string | null) => {
     if (status === 'completed') {
       return conclusion === 'success' ? '#10b981' : '#ef4444';
@@ -185,6 +200,20 @@ export const BuildStatusScreen: React.FC<BuildStatusScreenProps> = ({
                 }}
               >
                 <Text style={styles.copyLinkBtnText}>📋 Copy APK Download Link</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={[styles.downloadBtn, { backgroundColor: '#3b82f6', marginTop: 10 }]} onPress={handleDownloadProxy}>
+                <Text style={styles.downloadBtnText}>⚡ Download via Proxy (gh-proxy)</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.copyLinkBtn, { marginTop: 10 }]}
+                onPress={async () => {
+                  const proxyUrl = `https://gh-proxy.org/${apkAsset.browser_download_url}`;
+                  await ClipboardExpo.setStringAsync(proxyUrl);
+                  Alert.alert('Copied!', 'Proxy APK Download URL copied to clipboard.');
+                }}
+              >
+                <Text style={styles.copyLinkBtnText}>📋 Copy Proxy Download Link</Text>
               </TouchableOpacity>
               <Text style={styles.apkMeta}>{apkAsset.name}</Text>
               {currentCommitSha ? (
