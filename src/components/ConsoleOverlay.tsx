@@ -84,7 +84,7 @@ export const ConsoleOverlay: React.FC<ConsoleOverlayProps> = ({ visible, onClose
               const hasPayload = !!item.fullPayload;
 
               let formattedPayload = '';
-              if (hasPayload && item.fullPayload) {
+              if (isExpanded && hasPayload && item.fullPayload) {
                 try {
                   formattedPayload = JSON.stringify(JSON.parse(item.fullPayload), null, 2);
                 } catch {
