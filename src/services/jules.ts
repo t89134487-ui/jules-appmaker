@@ -63,14 +63,6 @@ export interface JulesActivity {
     reason: string;
   };
   artifacts?: Array<{
-    changeSet?: {
-      source: string;
-      gitPatch: {
-        baseCommitId: string;
-        unidiffPatch: string;
-        suggestedCommitMessage: string;
-      };
-    };
     bashOutput?: {
       command: string;
       output: string;
@@ -127,6 +119,29 @@ export class JulesService {
       logger.error(`Jules Fetch Failure: ${e.message}`);
       throw e;
     }
+  }
+
+  /**
+   * Helper function that calls the Jules API with a custom X-Goog-FieldMask HTTP header.
+   * This optimizes response payload sizes by requesting only specific fields.
+   *
+   * @param path The relative API endpoint path (e.g., 'sessions/1234')
+   * @param fields Array of required fields (e.g., ['id', 'title', 'state'])
+   * @param options Additional RequestInit options
+   */
+  async fetchWithFieldMask(
+    path: string,
+    fields: string[],
+    options: RequestInit = {}
+  ): Promise<any> {
+    const fieldMask = fields.join(',');
+    const headers = {
+      'X-Goog-FieldMask': fieldMask,
+      ...options.headers,
+    };
+
+    const url = path.startsWith('http') ? path : `${this.baseUrl}/${path}`;
+    return this.fetchWithAuth(url, { ...options, headers });
   }
 
   /**

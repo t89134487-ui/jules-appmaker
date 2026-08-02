@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, View, SafeAreaView, StatusBar, Text, TouchableOpacity, ActivityIndicator, Platform } from 'react-native';
+import { StyleSheet, View, SafeAreaView, StatusBar, Text, TouchableOpacity, ActivityIndicator, Platform, BackHandler } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LoginScreen } from './src/screens/LoginScreen';
 import { ApiKeyScreen } from './src/screens/ApiKeyScreen';
@@ -24,6 +24,32 @@ export default function App() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [hasExistingSessions, setHasExistingSessions] = useState<boolean>(false);
   const [pendingMessageToSend, setPendingMessageToSend] = useState<string | null>(null);
+
+  // Listen to Android hardware back press to navigate back inside the app
+  useEffect(() => {
+    const handleBackPress = () => {
+      if (currentScreen === 'API_KEY') {
+        setCurrentScreen('LOGIN');
+        return true;
+      }
+      if (currentScreen === 'CHAT') {
+        setCurrentScreen('DASHBOARD');
+        return true;
+      }
+      if (currentScreen === 'INTEGRATION') {
+        setCurrentScreen('CHAT');
+        return true;
+      }
+      if (currentScreen === 'BUILD_STATUS') {
+        setCurrentScreen('CHAT');
+        return true;
+      }
+      return false;
+    };
+
+    const subscription = BackHandler.addEventListener('hardwareBackPress', handleBackPress);
+    return () => subscription.remove();
+  }, [currentScreen]);
 
   // Restore credentials on boot
   useEffect(() => {
