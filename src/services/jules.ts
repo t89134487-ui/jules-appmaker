@@ -63,14 +63,6 @@ export interface JulesActivity {
     reason: string;
   };
   artifacts?: Array<{
-    changeSet?: {
-      source: string;
-      gitPatch: {
-        baseCommitId: string;
-        unidiffPatch: string;
-        suggestedCommitMessage: string;
-      };
-    };
     bashOutput?: {
       command: string;
       output: string;
@@ -92,10 +84,7 @@ export class JulesService {
 
   private async fetchWithAuth(url: string, options: RequestInit = {}): Promise<any> {
     const method = options.method || 'GET';
-    logger.info(`Jules Request: ${method} ${url}`);
-    if (options.body) {
-      logger.info(`Jules Request Body: ${options.body}`);
-    }
+    logger.info(`Jules Request: ${method} ${url}`, options.body ? String(options.body) : undefined);
 
     const headers = {
       'x-goog-api-key': this.apiKey,
@@ -119,10 +108,12 @@ export class JulesService {
         throw new Error(`Jules API Error: ${res.status} - ${msg}`);
       }
 
-      logger.info(`Jules Response code: ${res.status}`);
-      if (res.status === 204) return null;
+      if (res.status === 204) {
+        logger.info(`Jules Response code: ${res.status}`);
+        return null;
+      }
       const data = await res.json();
-      logger.info(`Jules Response payload success: ${JSON.stringify(data).substring(0, 300)}...`);
+      logger.info(`Jules Response success: ${res.status}`, JSON.stringify(data));
       return data;
     } catch (e: any) {
       logger.error(`Jules Fetch Failure: ${e.message}`);
@@ -131,10 +122,36 @@ export class JulesService {
   }
 
   /**
+   * Helper function that calls the Jules API with a custom X-Goog-FieldMask HTTP header.
+   * This optimizes response payload sizes by requesting only specific fields.
+   *
+   * @param path The relative API endpoint path (e.g., 'sessions/1234')
+   * @param fields Array of required fields (e.g., ['id', 'title', 'state'])
+   * @param options Additional RequestInit options
+   */
+  async fetchWithFieldMask(
+    path: string,
+    fields: string[],
+    options: RequestInit = {}
+  ): Promise<any> {
+    const fieldMask = fields.join(',');
+    const headers = {
+      'X-Goog-FieldMask': fieldMask,
+      ...options.headers,
+    };
+
+    const url = path.startsWith('http') ? path : `${this.baseUrl}/${path}`;
+    return this.fetchWithAuth(url, { ...options, headers });
+  }
+
+  /**
    * List all connected sources (repositories)
    */
   async getSources(): Promise<JulesSource[]> {
-    const data = await this.fetchWithAuth(`${this.baseUrl}/sources?pageSize=50`);
+    const data = await this.fetchWithFieldMask('sources?pageSize=50', [
+      'sources.id',
+      'sources.githubRepo'
+    ]);
     return data.sources || [];
   }
 
@@ -142,7 +159,15 @@ export class JulesService {
    * List sessions
    */
   async getSessions(): Promise<JulesSession[]> {
-    const data = await this.fetchWithAuth(`${this.baseUrl}/sessions?pageSize=50`);
+    const data = await this.fetchWithFieldMask('sessions?pageSize=50', [
+      'sessions.id',
+      'sessions.title',
+      'sessions.state',
+      'sessions.createTime',
+      'sessions.updateTime',
+      'sessions.prompt',
+      'sessions.sourceContext'
+    ]);
     return data.sessions || [];
   }
 
@@ -219,8 +244,23 @@ export class JulesService {
    */
   async getActivities(sessionId: string): Promise<JulesActivity[]> {
     const cleanedId = sessionId.startsWith('sessions/') ? sessionId : `sessions/${sessionId}`;
-    const data = await this.fetchWithAuth(`${this.baseUrl}/${cleanedId}/activities?pageSize=100`);
-    return data.activities || [];
+    let allActivities: JulesActivity[] = [];
+    let pageToken = '';
+
+    try {
+      do {
+        const url = `${this.baseUrl}/${cleanedId}/activities?pageSize=100${pageToken ? `&pageToken=${pageToken}` : ''}`;
+        const data = await this.fetchWithAuth(url);
+        if (data.activities && data.activities.length > 0) {
+          allActivities = allActivities.concat(data.activities);
+        }
+        pageToken = data.nextPageToken || '';
+      } while (pageToken);
+    } catch (e: any) {
+      logger.error(`Failed to walk paginated activities: ${e.message}`);
+    }
+
+    return allActivities;
   }
 
   /**
