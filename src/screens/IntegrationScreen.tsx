@@ -152,11 +152,35 @@ export const IntegrationScreen: React.FC<IntegrationScreenProps> = ({
       setIntegrated(true);
 
     } catch (e: any) {
-      // Mark current running step as failed
-      setSteps((prev) => {
-        return prev.map((s) => s.state === 'running' ? ({ ...s, state: 'failed' as const, error: e.message }) : s);
-      });
-      setErrorMsg(e.message);
+      const lowerErr = e.message.toLowerCase();
+      if (
+        lowerErr.includes('no commits between') ||
+        lowerErr.includes('already merged') ||
+        lowerErr.includes('no changes') ||
+        lowerErr.includes('nothing to merge') ||
+        lowerErr.includes('validation failed') // GitHub often returns "Validation Failed" for duplicate/empty PRs
+      ) {
+        logger.info(`IntegrationScreen: No changes or already integrated: ${e.message}. Treating as success.`);
+        // Mark all steps as success
+        setSteps((prev) => prev.map((s) => ({ ...s, state: 'success' as const })));
+
+        try {
+          const latestSha = await githubService.getLatestCommitSha(
+            selectedRepo.owner.login,
+            selectedRepo.name,
+            selectedRepo.default_branch
+          );
+          setFinalCommitSha(latestSha);
+        } catch {}
+
+        setIntegrated(true);
+      } else {
+        // Mark current running step as failed
+        setSteps((prev) => {
+          return prev.map((s) => s.state === 'running' ? ({ ...s, state: 'failed' as const, error: e.message }) : s);
+        });
+        setErrorMsg(e.message);
+      }
     } finally {
       setIntegrating(false);
     }
