@@ -362,24 +362,6 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       );
     }
 
-    if (act.sessionCompleted) {
-      return (
-        <View key={act.id} style={styles.completedCard}>
-          <Text selectable style={styles.completedTitle}>🎉 Task Completed!</Text>
-          <Text selectable style={styles.completedDesc}>{act.description || 'Jules has successfully completed the task!'}</Text>
-          <TouchableOpacity
-            style={[styles.chatBuildBtn, !isLastMessage && { backgroundColor: '#2e2e33' }]}
-            onPress={onStartIntegration}
-            disabled={!isLastMessage}
-          >
-            <Text style={[styles.chatBuildBtnText, !isLastMessage && { color: '#71717a' }]}>
-              {isLastMessage ? '🚀 Integrate Code & View APK' : 'Integrate Code (Disabled - Newer message exists)'}
-            </Text>
-          </TouchableOpacity>
-        </View>
-      );
-    }
-
     if (act.sessionFailed) {
       return (
         <View key={act.id} style={styles.failedCard}>
