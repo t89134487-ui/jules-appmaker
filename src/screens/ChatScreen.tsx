@@ -12,6 +12,7 @@ import {
   Platform,
   Alert,
   Linking,
+  Modal,
 } from 'react-native';
 import * as ClipboardExpo from 'expo-clipboard';
 import { JulesService, JulesSession, JulesActivity } from '../services/jules';
@@ -26,9 +27,12 @@ interface ChatScreenProps {
   selectedRepo: GitHubRepo;
   initialSessionId?: string | null;
   hasExistingSessions?: boolean;
+  initialMessage?: string | null;
+  onClearInitialMessage?: () => void;
   onSessionStarted: (sessionId: string) => void;
   onSessionStateFetched?: (state: string) => void;
   onViewBuildProgress?: () => void;
+  onStartIntegration?: () => void;
   onBack: () => void;
 }
 
@@ -38,9 +42,12 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   selectedRepo,
   initialSessionId,
   hasExistingSessions,
+  initialMessage,
+  onClearInitialMessage,
   onSessionStarted,
   onSessionStateFetched,
   onViewBuildProgress,
+  onStartIntegration,
   onBack,
 }) => {
   const [session, setSession] = useState<JulesSession | null>(null);
@@ -49,26 +56,12 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   const [message, setMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [mergedBranches, setMergedBranches] = useState<Record<string, boolean>>({});
-  interface LocalMergeStatus {
-    id: string;
-    text: string;
-    createTime: string;
-  }
-  const [localMergeStatuses, setLocalMergeStatuses] = useState<LocalMergeStatus[]>([]);
+  const [failedMessages, setFailedMessages] = useState<Array<{ id: string; text: string; createTime: string }>>([]);
+  const [jsonModalVisible, setJsonModalVisible] = useState(false);
+  const [selectedActivityJson, setSelectedActivityJson] = useState<string | null>(null);
   const [hasAttemptedMerge, setHasAttemptedMerge] = useState(false);
   const [buildTargetCommitSha, setBuildTargetCommitSha] = useState<string | null>(null);
   const [buildApkAsset, setBuildApkAsset] = useState<any | null>(null);
-
-  const addMergeStatus = (status: string) => {
-    setLocalMergeStatuses((prev) => [
-      ...prev,
-      {
-        id: `local-merge-${Math.random()}-${Date.now()}`,
-        text: status,
-        createTime: new Date().toISOString(),
-      },
-    ]);
-  };
 
   // Initial prompt state
   const [initialPrompt, setInitialPrompt] = useState('');
@@ -85,100 +78,6 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
 
       const acts = await julesService.getActivities(id);
       setActivities(acts);
-
-      // Perform direct quiet merge if Jules has completed the task
-      if (sess.state?.toUpperCase() === 'COMPLETED' && gitHubService && !hasAttemptedMerge) {
-        setHasAttemptedMerge(true);
-        try {
-          logger.info('ChatScreen: Fetching repo branches to perform direct quiet merge...');
-          addMergeStatus('Checking repository branches to integrate code...');
-          const branches = await gitHubService.getBranches(selectedRepo.owner.login, selectedRepo.name);
-
-          let matchedAnyBranch = false;
-          for (const branch of branches) {
-            const branchName = branch.name;
-
-            // Look for any branch starting with 'jules-' that is not the default branch
-            if (branchName.startsWith('jules-') && branchName !== selectedRepo.default_branch) {
-              matchedAnyBranch = true;
-              if (!mergedBranches[branchName]) {
-                logger.info(`ChatScreen: Detected completed session branch "${branchName}". Triggering PR creation & rebase merge...`);
-                addMergeStatus(`Integrating development branch "${branchName}" via rebase...`);
-
-                // Immediately mark as merged locally to prevent concurrent/duplicate API requests
-                setMergedBranches((prev) => ({ ...prev, [branchName]: true }));
-
-                try {
-                  // Fetch open PRs to see if one already exists
-                  const openPrs = await gitHubService.getOpenPullRequests(selectedRepo.owner.login, selectedRepo.name);
-                  let pr = openPrs.find((p: any) => p.head && p.head.ref === branchName);
-
-                  if (!pr) {
-                    logger.info(`ChatScreen: No open PR found for branch "${branchName}". Creating new PR...`);
-                    addMergeStatus(`Creating integration Pull Request for "${branchName}"...`);
-                    pr = await gitHubService.createPullRequest(
-                      selectedRepo.owner.login,
-                      selectedRepo.name,
-                      `Merge Jules development branch "${branchName}"`,
-                      branchName,
-                      selectedRepo.default_branch
-                    );
-                  }
-
-                  const prNumber = pr.number;
-                  logger.info(`ChatScreen: Merging PR #${prNumber} via rebase...`);
-                  addMergeStatus(`Performing fast-forward rebase merge for PR #${prNumber}...`);
-
-                  const mergeResult = await gitHubService.mergePullRequest(
-                    selectedRepo.owner.login,
-                    selectedRepo.name,
-                    prNumber,
-                    'rebase'
-                  );
-                  logger.info(`ChatScreen: PR #${prNumber} merged successfully via rebase: ${JSON.stringify(mergeResult)}`);
-                  addMergeStatus(`Rebase merge complete! Cleaning up development branch "${branchName}"...`);
-
-                  // Delete the branch quietly to clean up references
-                  try {
-                    await gitHubService.deleteBranch(
-                      selectedRepo.owner.login,
-                      selectedRepo.name,
-                      branchName
-                    );
-                    logger.info(`ChatScreen: Branch "${branchName}" deleted successfully quietly.`);
-                    addMergeStatus(`Integrated "${branchName}" successfully via rebase and cleaned up branch.`);
-                  } catch (deleteErr: any) {
-                    logger.warn(`ChatScreen: Quiet branch deletion failed for "${branchName}": ${deleteErr.message}`);
-                    addMergeStatus(`Integrated "${branchName}" successfully via rebase (cleanup skipped).`);
-                  }
-
-                  // After successful rebase merge, fetch the latest commit of the default branch to poll the build
-                  try {
-                    const latestSha = await gitHubService.getLatestCommitSha(
-                      selectedRepo.owner.login,
-                      selectedRepo.name,
-                      selectedRepo.default_branch
-                    );
-                    logger.info(`ChatScreen: Set build target commit SHA to default branch head: ${latestSha}`);
-                    setBuildTargetCommitSha(latestSha);
-                  } catch (shaErr: any) {
-                    logger.warn(`ChatScreen: Failed to retrieve default branch latest SHA: ${shaErr.message}`);
-                  }
-                } catch (mergeErr: any) {
-                  logger.error(`ChatScreen: Rebase merge failed for branch "${branchName}": ${mergeErr.message}`);
-                  addMergeStatus(`Failed to integrate branch: ${mergeErr.message}`);
-                }
-              }
-            }
-          }
-          if (!matchedAnyBranch) {
-            addMergeStatus('Code changes are already integrated into the default branch.');
-          }
-        } catch (e: any) {
-          logger.warn(`ChatScreen: Failed to list/merge branches: ${e.message}`);
-          addMergeStatus(`Branch integration lookup failed: ${e.message}`);
-        }
-      }
     } catch (e: any) {
       console.warn('Failed to poll session state', e);
     }
@@ -189,7 +88,6 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     if (initialSessionId) {
       logger.info(`Resuming existing session thread: ${initialSessionId}`);
       setLoading(true);
-      setLocalMergeStatuses([]);
       setHasAttemptedMerge(false);
       setBuildTargetCommitSha(null);
       setBuildApkAsset(null);
@@ -203,7 +101,6 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     } else {
       setSession(null);
       setActivities([]);
-      setLocalMergeStatuses([]);
       setHasAttemptedMerge(false);
       setBuildTargetCommitSha(null);
       setBuildApkAsset(null);
@@ -253,6 +150,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       - Regardless of the framework you choose, you must create a complete GitHub Actions CI pipeline in \`.github/workflows/build-main-apk.yml\` to compile and package the app into a fully signed standalone Release APK.
       - Make sure the CI workflow builds and uploads this final APK as a Release Asset in a new GitHub release tag (e.g. upload to a release) so the user can easily install/download it.
       - Generate all necessary code scaffolding and project structure from scratch. Ensure a clean directory structure.
+      - Create a local \`AGENTS.md\` or configuration file instructing developers to always create new commits and never amend existing commits when applying changes.
       - Once you complete writing the code, please make sure to merge your changes directly into the starting default branch (e.g. '${selectedRepo.default_branch}') so they are integrated instantly without leaving open Pull Requests.`;
 
       logger.info('Calling julesService.createSession()...');
@@ -265,7 +163,6 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       });
 
       logger.info(`Session created successfully. ID: ${newSession.id}. State: ${newSession.state}`);
-      setLocalMergeStatuses([]);
       setHasAttemptedMerge(false);
       setBuildTargetCommitSha(null);
       setBuildApkAsset(null);
@@ -290,11 +187,9 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     }
   };
 
-  const handleSendMessage = async () => {
-    if (!message.trim() || !session) return;
+  const handleSendDirectMessage = async (textToSend: string) => {
+    if (!session) return;
     setSubmitting(true);
-    const textToSend = message.trim();
-    setMessage('');
     try {
       await julesService.sendMessage(session.id, textToSend);
 
@@ -309,6 +204,57 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
         if (session) fetchSessionState(session.id);
       }, 5000);
     } catch (e: any) {
+      const failedId = `failed-msg-${Math.random()}-${Date.now()}`;
+      setFailedMessages((prev) => [
+        ...prev,
+        { id: failedId, text: textToSend, createTime: new Date().toISOString() },
+      ]);
+      Alert.alert('Error Sending Message', e.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleSendMessage = async () => {
+    if (!message.trim() || !session) return;
+    const textToSend = message.trim();
+    setMessage('');
+    await handleSendDirectMessage(textToSend);
+  };
+
+  // Auto-send initial message (like a merge conflict fix prompt) once session is ready
+  useEffect(() => {
+    if (initialMessage && session && !submitting) {
+      logger.info(`ChatScreen: Auto-sending initial conflict fix message: ${initialMessage}`);
+      handleSendDirectMessage(initialMessage);
+      if (onClearInitialMessage) {
+        onClearInitialMessage();
+      }
+    }
+  }, [initialMessage, session]);
+
+  const handleRetryMessage = async (failedId: string, text: string) => {
+    if (!session) return;
+    setSubmitting(true);
+    setFailedMessages((prev) => prev.filter((m) => m.id !== failedId));
+    try {
+      await julesService.sendMessage(session.id, text);
+
+      // Fetch immediately to display user message in the activities list
+      await fetchSessionState(session.id);
+
+      // Schedule subsequent fetches to catch state transition on Jules server
+      setTimeout(() => {
+        if (session) fetchSessionState(session.id);
+      }, 2000);
+      setTimeout(() => {
+        if (session) fetchSessionState(session.id);
+      }, 5000);
+    } catch (e: any) {
+      setFailedMessages((prev) => [
+        ...prev,
+        { id: failedId, text, createTime: new Date().toISOString() },
+      ]);
       Alert.alert('Error Sending Message', e.message);
     } finally {
       setSubmitting(false);
@@ -329,8 +275,19 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     }
   };
 
+  const renderJsonButton = (activity: JulesActivity) => {
+    return (
+      <TouchableOpacity
+        style={styles.activityJsonBtn}
+        onPress={() => setSelectedActivityJson(JSON.stringify(activity, null, 2))}
+      >
+        <Text style={styles.activityJsonBtnText}>{} JSON</Text>
+      </TouchableOpacity>
+    );
+  };
+
   // Helper to render activity logs/messages
-  const renderActivityItem = (act: JulesActivity) => {
+  const renderActivityItem = (act: JulesActivity, isLastMessage = true) => {
     if (act.userMessaged) {
       return (
         <View key={act.id} style={[styles.msgRow, styles.msgUser]}>
@@ -343,8 +300,11 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     if (act.agentMessaged) {
       return (
         <View key={act.id} style={[styles.msgRow, styles.msgAgent]}>
-          <Text style={styles.msgLabelAgent}>Jules</Text>
-          <Text style={styles.msgTextAgent}>{act.agentMessaged.agentMessage}</Text>
+          <View style={styles.msgHeaderRow}>
+            <Text selectable style={styles.msgLabelAgent}>Jules</Text>
+            {renderJsonButton(act)}
+          </View>
+          <Text selectable style={styles.msgTextAgent}>{act.agentMessaged.agentMessage}</Text>
         </View>
       );
     }
@@ -353,11 +313,14 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       const plan = act.planGenerated.plan;
       return (
         <View key={act.id} style={styles.planCard}>
-          <Text style={styles.planTitle}>📋 Proposed Development Plan</Text>
-          {plan.steps.map((step) => (
+          <View style={styles.msgHeaderRow}>
+            <Text selectable style={styles.planTitle}>📋 Proposed Development Plan</Text>
+            {renderJsonButton(act)}
+          </View>
+          {plan.steps.map((step, idx) => (
             <View key={step.id} style={styles.stepItem}>
-              <Text style={styles.stepIndex}>{step.index + 1}. {step.title}</Text>
-              <Text style={styles.stepDesc}>{step.description}</Text>
+              <Text selectable style={styles.stepIndex}>{idx + 1}. {step.title}</Text>
+              <Text selectable style={styles.stepDesc}>{step.description}</Text>
             </View>
           ))}
         </View>
@@ -370,8 +333,32 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
 
       return (
         <View key={act.id} style={styles.progressCard}>
-          <Text style={styles.progressTitle}>⚡ Progress: {progressTitle}</Text>
-          {progressDesc ? <Text style={styles.progressDesc}>{progressDesc}</Text> : null}
+          <View style={styles.msgHeaderRow}>
+            <Text selectable style={styles.progressTitle}>⚡ Progress: {progressTitle}</Text>
+            {renderJsonButton(act)}
+          </View>
+          {progressDesc ? <Text selectable style={styles.progressDesc}>{progressDesc}</Text> : null}
+        </View>
+      );
+    }
+
+    if (act.sessionCompleted) {
+      return (
+        <View key={act.id} style={styles.completedCard}>
+          <View style={styles.msgHeaderRow}>
+            <Text selectable style={styles.completedTitle}>🎉 Task Completed!</Text>
+            {renderJsonButton(act)}
+          </View>
+          <Text selectable style={styles.completedDesc}>{act.description || 'Jules has successfully completed the task!'}</Text>
+          <TouchableOpacity
+            style={[styles.chatBuildBtn, !isLastMessage && { backgroundColor: '#2e2e33' }]}
+            onPress={onStartIntegration}
+            disabled={!isLastMessage}
+          >
+            <Text style={[styles.chatBuildBtnText, !isLastMessage && { color: '#71717a' }]}>
+              {isLastMessage ? '🚀 Integrate Code & View APK' : 'Integrate Code (Disabled - Newer message exists)'}
+            </Text>
+          </TouchableOpacity>
         </View>
       );
     }
@@ -379,8 +366,11 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     if (act.sessionFailed) {
       return (
         <View key={act.id} style={styles.failedCard}>
-          <Text style={styles.failedTitle}>❌ Session Failed</Text>
-          <Text style={styles.failedDesc}>{act.sessionFailed.reason}</Text>
+          <View style={styles.msgHeaderRow}>
+            <Text selectable style={styles.failedTitle}>❌ Session Failed</Text>
+            {renderJsonButton(act)}
+          </View>
+          <Text selectable style={styles.failedDesc}>{act.sessionFailed.reason}</Text>
         </View>
       );
     }
@@ -389,7 +379,10 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     if (act.description) {
       return (
         <View key={act.id} style={styles.statusCardFallback}>
-          <Text style={styles.statusCardTextFallback}>⚙️ {act.description}</Text>
+          <View style={styles.msgHeaderRow}>
+            <Text selectable style={styles.statusCardTextFallback}>⚙️ {act.description}</Text>
+            {renderJsonButton(act)}
+          </View>
         </View>
       );
     }
@@ -431,19 +424,23 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   // Combined chronological feed of API activities and local merge statuses
   // We use index preservation to prevent Hermes/JSC unstable sorting from scrambling the feed.
   const combinedFeed = [
-    ...activities.map((act, idx) => ({ ...act, originalIdx: idx, isLocalMergeStatus: false })),
-    ...localMergeStatuses.map(status => ({
-      id: status.id,
+    ...activities.map((act, idx) => ({ ...act, originalIdx: idx, isFailedMessage: false, failedText: undefined as string | undefined })),
+    ...failedMessages.map(failed => ({
+      id: failed.id,
       originalIdx: 999999,
-      isLocalMergeStatus: true,
-      description: status.text,
-      createTime: status.createTime,
+      isFailedMessage: true,
+      description: '',
+      failedText: failed.text as string | undefined,
+      createTime: failed.createTime,
     }))
   ].sort((a, b) => {
-    if (a.isLocalMergeStatus && b.isLocalMergeStatus) {
+    const isTemporalA = a.isFailedMessage;
+    const isTemporalB = b.isFailedMessage;
+
+    if (isTemporalA && isTemporalB) {
       return new Date(a.createTime).getTime() - new Date(b.createTime).getTime();
     }
-    if (a.isLocalMergeStatus || b.isLocalMergeStatus) {
+    if (isTemporalA || isTemporalB) {
       const timeA = new Date(a.createTime).getTime();
       const timeB = new Date(b.createTime).getTime();
       if (timeA !== timeB) {
@@ -451,9 +448,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       }
     }
     return (a.originalIdx || 0) - (b.originalIdx || 0);
-  });
-
-  const lastLocalMergeIdx = combinedFeed.map(item => !!item.isLocalMergeStatus).lastIndexOf(true);
+  }).slice(-50); // ONLY show the last fifty items!
 
   // If no session active, show creation panel
   if (!session) {
@@ -518,7 +513,9 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
             <Text style={styles.statusLabel}>{session.state}</Text>
           </View>
         </View>
-        <View style={{ width: 60 }} />
+        <TouchableOpacity style={styles.jsonHeaderBtn} onPress={onViewBuildProgress}>
+          <Text style={styles.jsonHeaderBtnText}>📦 View Build</Text>
+        </TouchableOpacity>
       </View>
 
       {/* Chat Area */}
@@ -535,79 +532,25 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
         </View>
 
         {combinedFeed.map((item, idx) => {
-          if (item.isLocalMergeStatus) {
-            const isLastLocalMerge = idx === lastLocalMergeIdx;
-
-            // If this is the last integration message, and we are either building or have a ready APK, we show the customized cards!
-            if (isLastLocalMerge && buildApkAsset) {
-              return (
-                <View key={item.id} style={styles.mergeStatusCardReady}>
-                  <Text style={styles.mergeStatusTitleReady}>📦 APK Build Success!</Text>
-                  <Text style={styles.mergeStatusDescReady}>
-                    Your standalone, test-key signed Android APK is ready!
-                  </Text>
-
-                  <TouchableOpacity
-                    style={styles.chatBuildBtnReady}
-                    onPress={async () => {
-                      try {
-                        const supported = await Linking.canOpenURL(buildApkAsset.browser_download_url);
-                        if (supported) {
-                          await Linking.openURL(buildApkAsset.browser_download_url);
-                        } else {
-                          Alert.alert('Error', `Cannot open download URL: ${buildApkAsset.browser_download_url}`);
-                        }
-                      } catch (e: any) {
-                        Alert.alert('Download Failed', e.message);
-                      }
-                    }}
-                  >
-                    <Text style={styles.chatBuildBtnTextReady}>Install / Download APK</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={styles.chatCopyBtnReady}
-                    onPress={async () => {
-                      await ClipboardExpo.setStringAsync(buildApkAsset.browser_download_url);
-                      Alert.alert('Copied!', 'APK Download URL copied to clipboard.');
-                    }}
-                  >
-                    <Text style={styles.chatCopyBtnTextReady}>📋 Copy APK Download Link</Text>
-                  </TouchableOpacity>
-
-                  <Text style={styles.apkMetaReady}>
-                    File: {buildApkAsset.name} (Commit: {buildTargetCommitSha?.substring(0, 7)})
-                  </Text>
-                </View>
-              );
-            }
-
-            if (isLastLocalMerge && buildTargetCommitSha) {
-              return (
-                <View key={item.id} style={styles.mergeStatusCardCompiling}>
-                  <Text style={styles.mergeStatusTitleCompiling}>⚙️ Integration Status: Compiling APK...</Text>
-                  <Text style={styles.mergeStatusDescCompiling}>
-                    Rebase merge complete! Standalone production APK is compiling in the background. (Typically takes 3 to 5 minutes)
-                  </Text>
-                  {onViewBuildProgress && (
-                    <TouchableOpacity style={[styles.chatBuildBtnCompiling, { marginTop: 12 }]} onPress={onViewBuildProgress}>
-                      <Text style={styles.chatBuildBtnTextCompiling}>🚀 View APK Build Progress</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-              );
-            }
-
-            // Otherwise, render normal static status card
+          if (item.isFailedMessage) {
             return (
-              <View key={item.id} style={styles.mergeStatusCard}>
-                <Text style={styles.mergeStatusTitle}>⚙️ Integration Status</Text>
-                <Text style={styles.mergeStatusDesc}>{item.description}</Text>
+              <View key={item.id} style={[styles.msgRow, styles.msgUser, styles.msgFailedBorder]}>
+                <View style={styles.msgFailedRow}>
+                  <Text selectable style={[styles.msgLabel, { color: '#ef4444' }]}>Failed to Send</Text>
+                  <TouchableOpacity
+                    style={styles.retryBtn}
+                    onPress={() => handleRetryMessage(item.id, item.failedText || '')}
+                  >
+                    <Text style={styles.retryBtnText}>🔄 Retry</Text>
+                  </TouchableOpacity>
+                </View>
+                <Text selectable style={styles.msgText}>{item.failedText}</Text>
               </View>
             );
-          } else {
-            return renderActivityItem(item as unknown as JulesActivity);
           }
+
+          const isLastMessage = idx === combinedFeed.length - 1;
+          return renderActivityItem(item as unknown as JulesActivity, isLastMessage);
         })}
       </ScrollView>
 
@@ -625,6 +568,49 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
           {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.sendBtnText}>Send</Text>}
         </TouchableOpacity>
       </View>
+
+      {/* Modal to view Raw Jules Activity JSON */}
+      <Modal
+        visible={!!selectedActivityJson}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setSelectedActivityJson(null)}
+      >
+        <View style={styles.jsonOverlay}>
+          <View style={styles.jsonContainer}>
+            <View style={styles.jsonHeader}>
+              <Text style={styles.jsonTitle}>🛠️ Raw Activity JSON</Text>
+              <TouchableOpacity style={styles.closeJsonBtn} onPress={() => setSelectedActivityJson(null)}>
+                <Text style={styles.closeJsonBtnText}>✕ Close</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.jsonScroll}>
+              <Text selectable style={styles.jsonTextCode}>
+                {selectedActivityJson}
+              </Text>
+            </ScrollView>
+
+            <View style={styles.jsonFooter}>
+              <TouchableOpacity
+                style={styles.copyJsonBtn}
+                onPress={async () => {
+                  try {
+                    if (selectedActivityJson) {
+                      await ClipboardExpo.setStringAsync(selectedActivityJson);
+                      Alert.alert('Success', 'Activity JSON copied to clipboard!');
+                    }
+                  } catch (e: any) {
+                    Alert.alert('Copy Failed', e.message);
+                  }
+                }}
+              >
+                <Text style={styles.copyJsonBtnText}>Copy Activity JSON</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 };
@@ -801,6 +787,47 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 15,
     lineHeight: 20,
+  },
+  msgHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+    width: '100%',
+  },
+  activityJsonBtn: {
+    paddingVertical: 3,
+    paddingHorizontal: 6,
+    backgroundColor: '#27272a',
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#3f3f46',
+  },
+  activityJsonBtnText: {
+    color: '#a1a1aa',
+    fontSize: 10,
+    fontWeight: 'bold',
+  },
+  msgFailedBorder: {
+    borderColor: '#ef4444',
+    borderWidth: 1,
+  },
+  msgFailedRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  retryBtn: {
+    backgroundColor: '#ef4444',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  retryBtnText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
   },
   planCard: {
     backgroundColor: '#1c1c1f',
@@ -1098,5 +1125,93 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: 'bold',
     fontSize: 13,
+  },
+  jsonHeaderBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    backgroundColor: '#1c1c1f',
+    borderColor: '#2e2e33',
+    borderWidth: 1,
+    borderRadius: 6,
+  },
+  jsonHeaderBtnText: {
+    color: '#3b82f6',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  jsonOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.85)',
+    justifyContent: 'flex-end',
+  },
+  jsonContainer: {
+    backgroundColor: '#09090b',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    height: '80%',
+    paddingBottom: 24,
+    borderTopWidth: 2,
+    borderColor: '#27272a',
+  },
+  jsonHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderColor: '#27272a',
+  },
+  jsonTitle: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: 'bold',
+  },
+  closeJsonBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    backgroundColor: '#27272a',
+    borderRadius: 6,
+  },
+  closeJsonBtnText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: 'bold',
+  },
+  jsonScroll: {
+    padding: 16,
+  },
+  sectionTitleHeader: {
+    color: '#c084fc',
+    fontSize: 14,
+    fontWeight: 'bold',
+    marginBottom: 8,
+  },
+  jsonTextCode: {
+    color: '#a1a1aa',
+    fontSize: 11,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    backgroundColor: '#18181b',
+    padding: 10,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#27272a',
+  },
+  jsonFooter: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderColor: '#27272a',
+    alignItems: 'flex-end',
+  },
+  copyJsonBtn: {
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    backgroundColor: '#3b82f6',
+    borderRadius: 8,
+  },
+  copyJsonBtnText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 14,
   },
 });
