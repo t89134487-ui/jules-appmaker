@@ -19,6 +19,12 @@ import { CONFIG } from '../config';
 interface DashboardScreenProps {
   githubService: GitHubService;
   julesService: JulesService | null;
+  repos: GitHubRepo[];
+  setRepos: (repos: GitHubRepo[]) => void;
+  allSessions: any[];
+  setAllSessions: (sessions: any[]) => void;
+  connectedSources: JulesSource[];
+  setConnectedSources: (sources: JulesSource[]) => void;
   onSelectRepo: (repo: GitHubRepo, sessionId?: string, hasExistingSessions?: boolean) => void;
   onLogout: () => void;
 }
@@ -28,11 +34,15 @@ import { ConsoleOverlay } from '../components/ConsoleOverlay';
 export const DashboardScreen: React.FC<DashboardScreenProps> = ({
   githubService,
   julesService,
+  repos,
+  setRepos,
+  allSessions,
+  setAllSessions,
+  connectedSources,
+  setConnectedSources,
   onSelectRepo,
   onLogout,
 }) => {
-  const [repos, setRepos] = useState<GitHubRepo[]>([]);
-  const [connectedSources, setConnectedSources] = useState<JulesSource[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [creating, setCreating] = useState(false);
@@ -46,7 +56,6 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
   const [justCreatedRepo, setJustCreatedRepo] = useState<GitHubRepo | null>(null);
 
   // Thread list modal fields
-  const [allSessions, setAllSessions] = useState<any[]>([]);
   const [repoSessions, setRepoSessions] = useState<any[]>([]);
   const [threadsModalVisible, setThreadsModalVisible] = useState(false);
   const [threadLoading, setThreadLoading] = useState(false);
@@ -69,26 +78,39 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
 
   const fetchRepos = async () => {
     setLoading(true);
-    try {
-      logger.info('Fetching GitHub repositories...');
-      const data = await githubService.getRepositories();
-      setRepos(data);
 
-      if (julesService) {
-        logger.info('Fetching Jules connected sources...');
-        const sources = await julesService.getSources();
-        setConnectedSources(sources);
-        logger.info(`Found ${sources.length} connected Jules sources.`);
+    // Fetch GitHub repositories concurrently
+    githubService.getRepositories()
+      .then((data) => {
+        setRepos(data);
+      })
+      .catch((e: any) => {
+        logger.error(`Error fetching GitHub repos: ${e.message}`);
+      });
 
-        logger.info('Fetching Jules active sessions/threads...');
-        const sessions = await julesService.getSessions();
-        setAllSessions(sessions);
-        logger.info(`Found ${sessions.length} sessions/threads in total.`);
-      }
-    } catch (e: any) {
-      logger.error(`Error fetching resources: ${e.message}`);
-      Alert.alert('Error Fetching Data', e.message);
-    } finally {
+    if (julesService) {
+      // Fetch Jules sessions concurrently so they render on the main screen instantly as they arrive
+      julesService.getSessions()
+        .then((sessions) => {
+          setAllSessions(sessions);
+          logger.info(`Found ${sessions.length} sessions/threads in total.`);
+          setLoading(false);
+        })
+        .catch((e: any) => {
+          logger.error(`Error fetching Jules sessions: ${e.message}`);
+          setLoading(false);
+        });
+
+      // Fetch connected sources concurrently
+      julesService.getSources()
+        .then((sources) => {
+          setConnectedSources(sources);
+          logger.info(`Found ${sources.length} connected Jules sources.`);
+        })
+        .catch((e: any) => {
+          logger.error(`Error fetching Jules sources: ${e.message}`);
+        });
+    } else {
       setLoading(false);
     }
   };
@@ -266,9 +288,6 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
           <Text style={styles.subtitle}>Select a thread to resume coding or start new</Text>
         </View>
         <View style={styles.headerBtns}>
-          <TouchableOpacity style={styles.logsBtn} onPress={() => setLogsVisible(true)}>
-            <Text style={styles.logsBtnText}>🪲 Logs</Text>
-          </TouchableOpacity>
           <TouchableOpacity style={styles.logoutBtn} onPress={onLogout}>
             <Text style={styles.logoutText}>Logout</Text>
           </TouchableOpacity>
@@ -301,6 +320,8 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
           data={filteredSessions}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.list}
+          refreshing={loading}
+          onRefresh={fetchRepos}
           renderItem={({ item }) => {
             const repo = getOrCreateRepoForSession(item);
             return (
