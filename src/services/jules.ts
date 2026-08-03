@@ -234,6 +234,7 @@ export class JulesService {
 
   /**
    * Retrieves activities for a session to show plan, logs, and messages.
+   * Uses field masking to only fetch required fields, discarding heavy unused fields.
    */
   async getActivities(sessionId: string): Promise<JulesActivity[]> {
     const cleanedId = sessionId.startsWith('sessions/') ? sessionId : `sessions/${sessionId}`;
@@ -242,8 +243,21 @@ export class JulesService {
 
     try {
       do {
-        const url = `${this.baseUrl}/${cleanedId}/activities?pageSize=100${pageToken ? `&pageToken=${pageToken}` : ''}`;
-        const data = await this.fetchWithAuth(url);
+        const path = `${cleanedId}/activities?pageSize=100${pageToken ? `&pageToken=${pageToken}` : ''}`;
+        const data = await this.fetchWithFieldMask(path, [
+          'nextPageToken',
+          'activities.id',
+          'activities.name',
+          'activities.originator',
+          'activities.description',
+          'activities.createTime',
+          'activities.userMessaged',
+          'activities.agentMessaged',
+          'activities.planGenerated',
+          'activities.progressUpdated',
+          'activities.sessionCompleted',
+          'activities.sessionFailed',
+        ]);
         if (data.activities && data.activities.length > 0) {
           allActivities = allActivities.concat(data.activities);
         }
