@@ -234,6 +234,7 @@ export class JulesService {
 
   /**
    * Retrieves activities for a session to show plan, logs, and messages.
+   * Uses field masking to only fetch required fields, discarding heavy unused fields.
    */
   async getActivities(sessionId: string): Promise<JulesActivity[]> {
     const cleanedId = sessionId.startsWith('sessions/') ? sessionId : `sessions/${sessionId}`;
