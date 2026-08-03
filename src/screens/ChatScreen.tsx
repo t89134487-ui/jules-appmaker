@@ -29,6 +29,8 @@ interface ChatScreenProps {
   hasExistingSessions?: boolean;
   initialMessage?: string | null;
   onClearInitialMessage?: () => void;
+  activities: JulesActivity[];
+  setActivities: (acts: JulesActivity[]) => void;
   onSessionStarted: (sessionId: string) => void;
   onSessionStateFetched?: (state: string) => void;
   onViewBuildProgress?: () => void;
@@ -44,6 +46,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   hasExistingSessions,
   initialMessage,
   onClearInitialMessage,
+  activities,
+  setActivities,
   onSessionStarted,
   onSessionStateFetched,
   onViewBuildProgress,
@@ -51,7 +55,6 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   onBack,
 }) => {
   const [session, setSession] = useState<JulesSession | null>(null);
-  const [activities, setActivities] = useState<JulesActivity[]>([]);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);

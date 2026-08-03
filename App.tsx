@@ -8,7 +8,7 @@ import { ChatScreen } from './src/screens/ChatScreen';
 import { BuildStatusScreen } from './src/screens/BuildStatusScreen';
 import { IntegrationScreen } from './src/screens/IntegrationScreen';
 import { GitHubService, GitHubRepo } from './src/services/github';
-import { JulesService, JulesSource } from './src/services/jules';
+import { JulesService, JulesSource, JulesActivity } from './src/services/jules';
 import { logger } from './src/services/logger';
 
 type Screen = 'LOGIN' | 'API_KEY' | 'DASHBOARD' | 'CHAT' | 'BUILD_STATUS' | 'INTEGRATION';
@@ -25,10 +25,11 @@ export default function App() {
   const [hasExistingSessions, setHasExistingSessions] = useState<boolean>(false);
   const [pendingMessageToSend, setPendingMessageToSend] = useState<string | null>(null);
 
-  // In-memory runtime cache for DashboardScreen
+  // In-memory runtime cache for DashboardScreen & ChatScreen
   const [cachedRepos, setCachedRepos] = useState<GitHubRepo[]>([]);
   const [cachedSessions, setCachedSessions] = useState<any[]>([]);
   const [cachedSources, setCachedSources] = useState<JulesSource[]>([]);
+  const [cachedActivities, setCachedActivities] = useState<Record<string, JulesActivity[]>>({});
 
   // Listen to Android hardware back press to navigate back inside the app
   useEffect(() => {
@@ -183,6 +184,12 @@ export default function App() {
               hasExistingSessions={hasExistingSessions}
               initialMessage={pendingMessageToSend}
               onClearInitialMessage={() => setPendingMessageToSend(null)}
+              activities={activeSessionId ? (cachedActivities[activeSessionId] || []) : []}
+              setActivities={(acts) => {
+                if (activeSessionId) {
+                  setCachedActivities((prev) => ({ ...prev, [activeSessionId]: acts }));
+                }
+              }}
               onSessionStarted={(id) => setActiveSessionId(id)}
               onSessionStateFetched={(state) => setActiveSessionState(state)}
               onViewBuildProgress={() => setCurrentScreen('BUILD_STATUS')}
