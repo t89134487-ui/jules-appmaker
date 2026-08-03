@@ -150,6 +150,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       - Regardless of the framework you choose, you must create a complete GitHub Actions CI pipeline in \`.github/workflows/build-main-apk.yml\` to compile and package the app into a fully signed standalone Release APK.
       - Make sure the CI workflow builds and uploads this final APK as a Release Asset in a new GitHub release tag (e.g. upload to a release) so the user can easily install/download it.
       - Generate all necessary code scaffolding and project structure from scratch. Ensure a clean directory structure.
+      - Create a local \`AGENTS.md\` or configuration file instructing developers to always create new commits and never amend existing commits when applying changes.
       - Once you complete writing the code, please make sure to merge your changes directly into the starting default branch (e.g. '${selectedRepo.default_branch}') so they are integrated instantly without leaving open Pull Requests.`;
 
       logger.info('Calling julesService.createSession()...');
