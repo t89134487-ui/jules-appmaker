@@ -19,6 +19,12 @@ import { CONFIG } from '../config';
 interface DashboardScreenProps {
   githubService: GitHubService;
   julesService: JulesService | null;
+  repos: GitHubRepo[];
+  setRepos: (repos: GitHubRepo[]) => void;
+  allSessions: any[];
+  setAllSessions: (sessions: any[]) => void;
+  connectedSources: JulesSource[];
+  setConnectedSources: (sources: JulesSource[]) => void;
   onSelectRepo: (repo: GitHubRepo, sessionId?: string, hasExistingSessions?: boolean) => void;
   onLogout: () => void;
 }
@@ -28,11 +34,15 @@ import { ConsoleOverlay } from '../components/ConsoleOverlay';
 export const DashboardScreen: React.FC<DashboardScreenProps> = ({
   githubService,
   julesService,
+  repos,
+  setRepos,
+  allSessions,
+  setAllSessions,
+  connectedSources,
+  setConnectedSources,
   onSelectRepo,
   onLogout,
 }) => {
-  const [repos, setRepos] = useState<GitHubRepo[]>([]);
-  const [connectedSources, setConnectedSources] = useState<JulesSource[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [creating, setCreating] = useState(false);
@@ -46,7 +56,6 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
   const [justCreatedRepo, setJustCreatedRepo] = useState<GitHubRepo | null>(null);
 
   // Thread list modal fields
-  const [allSessions, setAllSessions] = useState<any[]>([]);
   const [repoSessions, setRepoSessions] = useState<any[]>([]);
   const [threadsModalVisible, setThreadsModalVisible] = useState(false);
   const [threadLoading, setThreadLoading] = useState(false);

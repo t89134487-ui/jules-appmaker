@@ -148,7 +148,10 @@ export class JulesService {
    * List all connected sources (repositories)
    */
   async getSources(): Promise<JulesSource[]> {
-    const data = await this.fetchWithAuth(`${this.baseUrl}/sources?pageSize=50`);
+    const data = await this.fetchWithFieldMask('sources?pageSize=50', [
+      'sources.id',
+      'sources.githubRepo'
+    ]);
     return data.sources || [];
   }
 
@@ -156,7 +159,15 @@ export class JulesService {
    * List sessions
    */
   async getSessions(): Promise<JulesSession[]> {
-    const data = await this.fetchWithAuth(`${this.baseUrl}/sessions?pageSize=50`);
+    const data = await this.fetchWithFieldMask('sessions?pageSize=50', [
+      'sessions.id',
+      'sessions.title',
+      'sessions.state',
+      'sessions.createTime',
+      'sessions.updateTime',
+      'sessions.prompt',
+      'sessions.sourceContext'
+    ]);
     return data.sessions || [];
   }
 

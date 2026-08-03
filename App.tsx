@@ -8,7 +8,7 @@ import { ChatScreen } from './src/screens/ChatScreen';
 import { BuildStatusScreen } from './src/screens/BuildStatusScreen';
 import { IntegrationScreen } from './src/screens/IntegrationScreen';
 import { GitHubService, GitHubRepo } from './src/services/github';
-import { JulesService } from './src/services/jules';
+import { JulesService, JulesSource } from './src/services/jules';
 import { logger } from './src/services/logger';
 
 type Screen = 'LOGIN' | 'API_KEY' | 'DASHBOARD' | 'CHAT' | 'BUILD_STATUS' | 'INTEGRATION';
@@ -24,6 +24,11 @@ export default function App() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [hasExistingSessions, setHasExistingSessions] = useState<boolean>(false);
   const [pendingMessageToSend, setPendingMessageToSend] = useState<string | null>(null);
+
+  // In-memory runtime cache for DashboardScreen
+  const [cachedRepos, setCachedRepos] = useState<GitHubRepo[]>([]);
+  const [cachedSessions, setCachedSessions] = useState<any[]>([]);
+  const [cachedSources, setCachedSources] = useState<JulesSource[]>([]);
 
   // Listen to Android hardware back press to navigate back inside the app
   useEffect(() => {
@@ -155,6 +160,12 @@ export default function App() {
           <DashboardScreen
             githubService={githubService}
             julesService={julesService}
+            repos={cachedRepos}
+            setRepos={setCachedRepos}
+            allSessions={cachedSessions}
+            setAllSessions={setCachedSessions}
+            connectedSources={cachedSources}
+            setConnectedSources={setCachedSources}
             onSelectRepo={handleSelectRepo}
             onLogout={handleLogout}
           />
