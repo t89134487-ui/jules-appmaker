@@ -48,7 +48,7 @@ export class GitHubService {
 
   private async fetchWithAuth(url: string, options: RequestInit = {}): Promise<any> {
     const method = options.method || 'GET';
-    logger.info(`GitHub Request: ${method} ${url}`);
+    logger.info(`GitHub Request: ${method} ${url}`, options.body ? String(options.body) : undefined);
 
     const headers = {
       Authorization: `Bearer ${this.token}`,
@@ -66,9 +66,13 @@ export class GitHubService {
         throw new Error(`GitHub API Error: ${res.status} ${res.statusText} - ${errorText}`);
       }
 
-      logger.info(`GitHub Response: ${res.status} ${res.statusText}`);
-      if (res.status === 204) return null;
-      return res.json();
+      if (res.status === 204) {
+        logger.info(`GitHub Response: ${res.status} ${res.statusText}`);
+        return null;
+      }
+      const data = await res.json();
+      logger.info(`GitHub Response: ${res.status} ${res.statusText}`, JSON.stringify(data));
+      return data;
     } catch (e: any) {
       logger.error(`GitHub Fetch Failure: ${e.message}`);
       throw e;

@@ -1,16 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, View, SafeAreaView, StatusBar, Text, TouchableOpacity, ActivityIndicator, Platform } from 'react-native';
+import { StyleSheet, View, SafeAreaView, StatusBar, Text, TouchableOpacity, ActivityIndicator, Platform, BackHandler } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LoginScreen } from './src/screens/LoginScreen';
 import { ApiKeyScreen } from './src/screens/ApiKeyScreen';
 import { DashboardScreen } from './src/screens/DashboardScreen';
 import { ChatScreen } from './src/screens/ChatScreen';
 import { BuildStatusScreen } from './src/screens/BuildStatusScreen';
+import { IntegrationScreen } from './src/screens/IntegrationScreen';
 import { GitHubService, GitHubRepo } from './src/services/github';
-import { JulesService } from './src/services/jules';
+import { JulesService, JulesSource, JulesActivity } from './src/services/jules';
 import { logger } from './src/services/logger';
 
-type Screen = 'LOGIN' | 'API_KEY' | 'DASHBOARD' | 'CHAT' | 'BUILD_STATUS';
+type Screen = 'LOGIN' | 'API_KEY' | 'DASHBOARD' | 'CHAT' | 'BUILD_STATUS' | 'INTEGRATION';
 
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState<Screen>('LOGIN');
@@ -22,6 +23,40 @@ export default function App() {
   const [selectedRepo, setSelectedRepo] = useState<GitHubRepo | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [hasExistingSessions, setHasExistingSessions] = useState<boolean>(false);
+  const [pendingMessageToSend, setPendingMessageToSend] = useState<string | null>(null);
+
+  // In-memory runtime cache for DashboardScreen & ChatScreen
+  const [cachedRepos, setCachedRepos] = useState<GitHubRepo[]>([]);
+  const [cachedSessions, setCachedSessions] = useState<any[]>([]);
+  const [cachedSources, setCachedSources] = useState<JulesSource[]>([]);
+  const [cachedActivities, setCachedActivities] = useState<Record<string, JulesActivity[]>>({});
+  const [cachedPageTokens, setCachedPageTokens] = useState<Record<string, string>>({});
+
+  // Listen to Android hardware back press to navigate back inside the app
+  useEffect(() => {
+    const handleBackPress = () => {
+      if (currentScreen === 'API_KEY') {
+        setCurrentScreen('LOGIN');
+        return true;
+      }
+      if (currentScreen === 'CHAT') {
+        setCurrentScreen('DASHBOARD');
+        return true;
+      }
+      if (currentScreen === 'INTEGRATION') {
+        setCurrentScreen('CHAT');
+        return true;
+      }
+      if (currentScreen === 'BUILD_STATUS') {
+        setCurrentScreen('CHAT');
+        return true;
+      }
+      return false;
+    };
+
+    const subscription = BackHandler.addEventListener('hardwareBackPress', handleBackPress);
+    return () => subscription.remove();
+  }, [currentScreen]);
 
   // Restore credentials on boot
   useEffect(() => {
@@ -127,6 +162,12 @@ export default function App() {
           <DashboardScreen
             githubService={githubService}
             julesService={julesService}
+            repos={cachedRepos}
+            setRepos={setCachedRepos}
+            allSessions={cachedSessions}
+            setAllSessions={setCachedSessions}
+            connectedSources={cachedSources}
+            setConnectedSources={setCachedSources}
             onSelectRepo={handleSelectRepo}
             onLogout={handleLogout}
           />
@@ -142,12 +183,43 @@ export default function App() {
               selectedRepo={selectedRepo}
               initialSessionId={activeSessionId}
               hasExistingSessions={hasExistingSessions}
+              initialMessage={pendingMessageToSend}
+              onClearInitialMessage={() => setPendingMessageToSend(null)}
+              activities={activeSessionId ? (cachedActivities[activeSessionId] || []) : []}
+              setActivities={(acts) => {
+                if (activeSessionId) {
+                  setCachedActivities((prev) => ({ ...prev, [activeSessionId]: acts }));
+                }
+              }}
+              pageToken={activeSessionId ? (cachedPageTokens[activeSessionId] || '') : ''}
+              setPageToken={(token) => {
+                if (activeSessionId) {
+                  setCachedPageTokens((prev) => ({ ...prev, [activeSessionId]: token }));
+                }
+              }}
               onSessionStarted={(id) => setActiveSessionId(id)}
               onSessionStateFetched={(state) => setActiveSessionState(state)}
               onViewBuildProgress={() => setCurrentScreen('BUILD_STATUS')}
+              onStartIntegration={() => setCurrentScreen('INTEGRATION')}
               onBack={() => setCurrentScreen('DASHBOARD')}
             />
           </View>
+        );
+      case 'INTEGRATION':
+        if (!githubService || !selectedRepo) return null;
+        return (
+          <IntegrationScreen
+            githubService={githubService}
+            selectedRepo={selectedRepo}
+            onMergeComplete={(commitSha) => {
+              setCurrentScreen('BUILD_STATUS');
+            }}
+            onFixMergeConflict={(msg) => {
+              setPendingMessageToSend(msg);
+              setCurrentScreen('CHAT');
+            }}
+            onBack={() => setCurrentScreen('CHAT')}
+          />
         );
       case 'BUILD_STATUS':
         if (!githubService || !selectedRepo) return null;
