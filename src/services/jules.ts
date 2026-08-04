@@ -258,6 +258,40 @@ export class JulesService {
   }
 
   /**
+   * Retrieves activities incrementally since the last loaded nextPageToken, appending only new pages.
+   */
+  async getActivitiesIncremental(
+    sessionId: string,
+    existingActivities: JulesActivity[],
+    lastPageToken: string
+  ): Promise<{ activities: JulesActivity[]; nextPageToken: string }> {
+    const cleanedId = sessionId.startsWith('sessions/') ? sessionId : `sessions/${sessionId}`;
+    let allActivities = [...existingActivities];
+    let pageToken = lastPageToken;
+    let newNextPageToken = lastPageToken;
+
+    try {
+      do {
+        const url = `${this.baseUrl}/${cleanedId}/activities?pageSize=100${pageToken ? `&pageToken=${pageToken}` : ''}`;
+        const data = await this.fetchWithAuth(url);
+        if (data.activities && data.activities.length > 0) {
+          for (const newAct of data.activities) {
+            if (!allActivities.some((existing) => existing.id === newAct.id)) {
+              allActivities.push(newAct);
+            }
+          }
+        }
+        newNextPageToken = data.nextPageToken || '';
+        pageToken = data.nextPageToken || '';
+      } while (pageToken);
+    } catch (e: any) {
+      logger.error(`Failed to fetch incremental activities: ${e.message}`);
+    }
+
+    return { activities: allActivities, nextPageToken: newNextPageToken };
+  }
+
+  /**
    * Sends a user chat message into the active session
    */
   async sendMessage(sessionId: string, message: string): Promise<void> {

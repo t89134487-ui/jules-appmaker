@@ -31,6 +31,8 @@ interface ChatScreenProps {
   onClearInitialMessage?: () => void;
   activities: JulesActivity[];
   setActivities: (acts: JulesActivity[]) => void;
+  pageToken: string;
+  setPageToken: (token: string) => void;
   onSessionStarted: (sessionId: string) => void;
   onSessionStateFetched?: (state: string) => void;
   onViewBuildProgress?: () => void;
@@ -48,6 +50,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   onClearInitialMessage,
   activities,
   setActivities,
+  pageToken,
+  setPageToken,
   onSessionStarted,
   onSessionStateFetched,
   onViewBuildProgress,
@@ -71,6 +75,12 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
 
   const scrollRef = useRef<ScrollView>(null);
 
+  const activitiesRef = useRef(activities);
+  activitiesRef.current = activities;
+
+  const pageTokenRef = useRef(pageToken);
+  pageTokenRef.current = pageToken;
+
   const fetchSessionState = async (id: string) => {
     try {
       const sess = await julesService.getSession(id);
@@ -79,8 +89,13 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
         onSessionStateFetched(sess.state);
       }
 
-      const acts = await julesService.getActivities(id);
-      setActivities(acts);
+      const result = await julesService.getActivitiesIncremental(
+        id,
+        activitiesRef.current,
+        pageTokenRef.current
+      );
+      setActivities(result.activities);
+      setPageToken(result.nextPageToken);
     } catch (e: any) {
       console.warn('Failed to poll session state', e);
     }
@@ -104,6 +119,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     } else {
       setSession(null);
       setActivities([]);
+      setPageToken('');
       setHasAttemptedMerge(false);
       setBuildTargetCommitSha(null);
       setBuildApkAsset(null);

@@ -30,6 +30,7 @@ export default function App() {
   const [cachedSessions, setCachedSessions] = useState<any[]>([]);
   const [cachedSources, setCachedSources] = useState<JulesSource[]>([]);
   const [cachedActivities, setCachedActivities] = useState<Record<string, JulesActivity[]>>({});
+  const [cachedPageTokens, setCachedPageTokens] = useState<Record<string, string>>({});
 
   // Listen to Android hardware back press to navigate back inside the app
   useEffect(() => {
@@ -188,6 +189,12 @@ export default function App() {
               setActivities={(acts) => {
                 if (activeSessionId) {
                   setCachedActivities((prev) => ({ ...prev, [activeSessionId]: acts }));
+                }
+              }}
+              pageToken={activeSessionId ? (cachedPageTokens[activeSessionId] || '') : ''}
+              setPageToken={(token) => {
+                if (activeSessionId) {
+                  setCachedPageTokens((prev) => ({ ...prev, [activeSessionId]: token }));
                 }
               }}
               onSessionStarted={(id) => setActiveSessionId(id)}
