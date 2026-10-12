@@ -124,11 +124,12 @@ export class GitHubService {
   /**
    * Polls the workflow runs in the specified repository to check build status.
    */
-  async getWorkflowRuns(owner: string, repo: string): Promise<GitHubWorkflowRun[]> {
+  async getWorkflowRuns(owner: string, repo: string, branch?: string): Promise<GitHubWorkflowRun[]> {
     try {
-      const data = await this.fetchWithAuth(
-        `https://api.github.com/repos/${owner}/${repo}/actions/runs?per_page=10`
-      );
+      const url = branch
+        ? `https://api.github.com/repos/${owner}/${repo}/actions/runs?branch=${encodeURIComponent(branch)}&per_page=10`
+        : `https://api.github.com/repos/${owner}/${repo}/actions/runs?per_page=10`;
+      const data = await this.fetchWithAuth(url);
       return data.workflow_runs || [];
     } catch (e) {
       console.warn('Failed to fetch workflow runs', e);

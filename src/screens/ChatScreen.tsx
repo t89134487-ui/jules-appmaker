@@ -15,6 +15,7 @@ import {
   Modal,
 } from 'react-native';
 import * as ClipboardExpo from 'expo-clipboard';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { JulesService, JulesSession, JulesActivity } from '../services/jules';
 import { GitHubRepo } from '../services/github';
 import { logger } from '../services/logger';
@@ -69,6 +70,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   const [hasAttemptedMerge, setHasAttemptedMerge] = useState(false);
   const [buildTargetCommitSha, setBuildTargetCommitSha] = useState<string | null>(null);
   const [buildApkAsset, setBuildApkAsset] = useState<any | null>(null);
+  const [isClosed, setIsClosed] = useState(false);
 
   // Initial prompt state
   const [initialPrompt, setInitialPrompt] = useState('');
@@ -100,6 +102,20 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       console.warn('Failed to poll session state', e);
     }
   };
+
+  // Check if session is closed when session changes
+  useEffect(() => {
+    if (session?.id) {
+      AsyncStorage.getItem('@closed_session_ids')
+        .then((raw) => {
+          const ids: string[] = raw ? JSON.parse(raw) : [];
+          setIsClosed(ids.includes(session.id));
+        })
+        .catch(() => setIsClosed(false));
+    } else {
+      setIsClosed(false);
+    }
+  }, [session?.id]);
 
   // Load existing session if specified on entry
   useEffect(() => {
@@ -235,10 +251,113 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   };
 
   const handleSendMessage = async () => {
-    if (!message.trim() || !session) return;
+    if (!message.trim() || !session || isClosed) return;
     const textToSend = message.trim();
     setMessage('');
     await handleSendDirectMessage(textToSend);
+  };
+
+  const markSessionClosedInStorage = async (sessionId: string) => {
+    try {
+      const raw = await AsyncStorage.getItem('@closed_session_ids');
+      const ids: string[] = raw ? JSON.parse(raw) : [];
+      if (!ids.includes(sessionId)) {
+        ids.push(sessionId);
+        await AsyncStorage.setItem('@closed_session_ids', JSON.stringify(ids));
+      }
+    } catch (e: any) {
+      logger.error(`Failed to mark session closed in AsyncStorage: ${e.message}`);
+    }
+  };
+
+  const performClose = async (shouldMerge: boolean) => {
+    if (!session) return;
+    setSubmitting(true);
+    try {
+      if (shouldMerge && gitHubService) {
+        logger.info(`Merging branch before closing session ${session.id}...`);
+        const branches = await gitHubService.getBranches(selectedRepo.owner.login, selectedRepo.name);
+        let targetBranchName = '';
+        for (const branch of branches) {
+          if (branch.name.startsWith('jules-') && branch.name !== selectedRepo.default_branch) {
+            targetBranchName = branch.name;
+            break;
+          }
+        }
+
+        if (targetBranchName) {
+          try {
+            const openPrs = await gitHubService.getOpenPullRequests(selectedRepo.owner.login, selectedRepo.name);
+            let pr = openPrs.find((p: any) => p.head && p.head.ref === targetBranchName);
+            if (!pr) {
+              pr = await gitHubService.createPullRequest(
+                selectedRepo.owner.login,
+                selectedRepo.name,
+                `Merge Jules branch ${targetBranchName}`,
+                targetBranchName,
+                selectedRepo.default_branch
+              );
+            }
+            await gitHubService.mergePullRequest(
+              selectedRepo.owner.login,
+              selectedRepo.name,
+              pr.number,
+              'merge'
+            );
+          } catch (e: any) {
+            logger.warn(`PR merge failed, attempting direct branch merge: ${e.message}`);
+            try {
+              await gitHubService.mergeBranch(
+                selectedRepo.owner.login,
+                selectedRepo.name,
+                selectedRepo.default_branch,
+                targetBranchName
+              );
+            } catch (mergeErr: any) {
+              logger.warn(`Direct branch merge failed: ${mergeErr.message}`);
+            }
+          }
+
+          try {
+            await gitHubService.deleteBranch(selectedRepo.owner.login, selectedRepo.name, targetBranchName);
+          } catch (e: any) {
+            logger.warn(`Branch delete failed: ${e.message}`);
+          }
+        }
+      }
+
+      await markSessionClosedInStorage(session.id);
+      setIsClosed(true);
+      Alert.alert(
+        'Thread Closed',
+        shouldMerge ? 'Branch merged and thread closed successfully!' : 'Thread closed successfully.',
+        [{ text: 'OK', onPress: onBack }]
+      );
+    } catch (e: any) {
+      Alert.alert('Error', `Failed to close thread: ${e.message}`);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleCloseThreadPrompt = () => {
+    if (!session) return;
+    Alert.alert(
+      'Close Thread',
+      'Do you want to merge the changes into main before closing this thread?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Close without Merging',
+          style: 'destructive',
+          onPress: () => performClose(false),
+        },
+        {
+          text: 'Merge & Close',
+          onPress: () => performClose(true),
+        },
+      ]
+    );
   };
 
   // Auto-send initial message (like a merge conflict fix prompt) once session is ready
@@ -522,19 +641,26 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     >
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={onBack} style={{ width: 60 }}>
+        <TouchableOpacity onPress={onBack} style={{ width: 50 }}>
           <Text style={styles.backText}>← Back</Text>
         </TouchableOpacity>
         <View style={styles.headerMeta}>
           <Text style={styles.headerTitle} numberOfLines={1}>{selectedRepo.name}</Text>
           <View style={styles.statusRow}>
-            <View style={[styles.statusDot, { backgroundColor: getStatusColor(session.state) }]} />
-            <Text style={styles.statusLabel}>{session.state}</Text>
+            <View style={[styles.statusDot, { backgroundColor: isClosed ? '#71717a' : getStatusColor(session.state) }]} />
+            <Text style={styles.statusLabel}>{isClosed ? 'CLOSED' : session.state}</Text>
           </View>
         </View>
-        <TouchableOpacity style={styles.jsonHeaderBtn} onPress={onViewBuildProgress}>
-          <Text style={styles.jsonHeaderBtnText}>📦 View Build</Text>
-        </TouchableOpacity>
+        <View style={styles.headerRightBtns}>
+          <TouchableOpacity style={styles.jsonHeaderBtn} onPress={onViewBuildProgress}>
+            <Text style={styles.jsonHeaderBtnText}>📦 Build</Text>
+          </TouchableOpacity>
+          {!isClosed && (
+            <TouchableOpacity style={styles.closeHeaderBtn} onPress={handleCloseThreadPrompt}>
+              <Text style={styles.closeHeaderBtnText}>🔒 Close</Text>
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
 
       {/* Chat Area */}
@@ -574,19 +700,25 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       </ScrollView>
 
       {/* Input bar */}
-      <View style={styles.inputBar}>
-        <TextInput
-          style={styles.chatInput}
-          placeholder="Send Jules a message..."
-          placeholderTextColor="#888"
-          value={message}
-          onChangeText={setMessage}
-          editable={!submitting}
-        />
-        <TouchableOpacity style={styles.sendBtn} onPress={handleSendMessage} disabled={submitting}>
-          {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.sendBtnText}>Send</Text>}
-        </TouchableOpacity>
-      </View>
+      {isClosed ? (
+        <View style={styles.closedBanner}>
+          <Text style={styles.closedBannerText}>🔒 Thread Closed. This thread is archived and read-only.</Text>
+        </View>
+      ) : (
+        <View style={styles.inputBar}>
+          <TextInput
+            style={styles.chatInput}
+            placeholder="Send Jules a message..."
+            placeholderTextColor="#888"
+            value={message}
+            onChangeText={setMessage}
+            editable={!submitting}
+          />
+          <TouchableOpacity style={styles.sendBtn} onPress={handleSendMessage} disabled={submitting}>
+            {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.sendBtnText}>Send</Text>}
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Modal to view Raw Jules Activity JSON */}
       <Modal
@@ -1145,17 +1277,47 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     fontSize: 13,
   },
+  headerRightBtns: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
   jsonHeaderBtn: {
     paddingVertical: 6,
-    paddingHorizontal: 10,
+    paddingHorizontal: 8,
     backgroundColor: '#1c1c1f',
     borderColor: '#2e2e33',
     borderWidth: 1,
     borderRadius: 6,
+    marginRight: 6,
   },
   jsonHeaderBtnText: {
     color: '#3b82f6',
     fontSize: 12,
+    fontWeight: 'bold',
+  },
+  closeHeaderBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    backgroundColor: '#27272a',
+    borderColor: '#ef4444',
+    borderWidth: 1,
+    borderRadius: 6,
+  },
+  closeHeaderBtnText: {
+    color: '#ef4444',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  closedBanner: {
+    borderTopWidth: 1,
+    borderColor: '#1e1e24',
+    padding: 16,
+    backgroundColor: '#18181b',
+    alignItems: 'center',
+  },
+  closedBannerText: {
+    color: '#a1a1aa',
+    fontSize: 13,
     fontWeight: 'bold',
   },
   jsonOverlay: {
