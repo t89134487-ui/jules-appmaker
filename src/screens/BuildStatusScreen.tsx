@@ -18,6 +18,7 @@ interface BuildStatusScreenProps {
   repoOwner: string;
   repoName: string;
   defaultBranch?: string;
+  targetBranch?: string;
   onBack: () => void;
 }
 
@@ -26,6 +27,7 @@ export const BuildStatusScreen: React.FC<BuildStatusScreenProps> = ({
   repoOwner,
   repoName,
   defaultBranch,
+  targetBranch,
   onBack,
 }) => {
   const [runs, setRuns] = useState<GitHubWorkflowRun[]>([]);
@@ -36,20 +38,36 @@ export const BuildStatusScreen: React.FC<BuildStatusScreenProps> = ({
 
   const fetchStatus = async () => {
     let targetCommitSha = null;
-    const branchName = defaultBranch || 'main';
+    let activeBranch = defaultBranch || 'main';
 
-    try {
-      // 1. Query the default branch's latest commit SHA (the merge commit) first!
-      targetCommitSha = await githubService.getLatestCommitSha(repoOwner, repoName, branchName);
-      setCurrentCommitSha(targetCommitSha);
-    } catch (e) {
-      console.warn('Failed to query latest commit SHA', e);
+    // If targetBranch is provided, attempt to fetch commit SHA for targetBranch first
+    if (targetBranch) {
+      try {
+        targetCommitSha = await githubService.getLatestCommitSha(repoOwner, repoName, targetBranch);
+        activeBranch = targetBranch;
+        setCurrentCommitSha(targetCommitSha);
+      } catch (e) {
+        console.warn(`Failed to query latest commit SHA for branch ${targetBranch}, falling back to default`, e);
+      }
+    }
+
+    if (!targetCommitSha) {
+      try {
+        targetCommitSha = await githubService.getLatestCommitSha(repoOwner, repoName, activeBranch);
+        setCurrentCommitSha(targetCommitSha);
+      } catch (e) {
+        console.warn('Failed to query latest commit SHA', e);
+      }
     }
 
     let actionRuns = [];
     try {
-      // 2. Get Action workflow runs
-      actionRuns = await githubService.getWorkflowRuns(repoOwner, repoName);
+      // 2. Get Action workflow runs for active branch or repo
+      actionRuns = await githubService.getWorkflowRuns(repoOwner, repoName, activeBranch);
+      if (actionRuns.length === 0 && activeBranch !== defaultBranch) {
+        // Fallback to all runs if branch-filtered runs return empty
+        actionRuns = await githubService.getWorkflowRuns(repoOwner, repoName);
+      }
       setRuns(actionRuns);
 
       // If we couldn't get the latest commit SHA, fall back to the head_sha of the latest workflow run

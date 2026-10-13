@@ -11,6 +11,7 @@ import {
   Alert,
 } from 'react-native';
 import * as ClipboardExpo from 'expo-clipboard';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { GitHubRepo, GitHubService } from '../services/github';
 import { JulesService, JulesSource } from '../services/jules';
 import { logger } from '../services/logger';
@@ -47,6 +48,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [creating, setCreating] = useState(false);
   const [logsVisible, setLogsVisible] = useState(false);
+  const [closedSessionIds, setClosedSessionIds] = useState<string[]>([]);
 
   // New repo fields
   const [newRepoName, setNewRepoName] = useState('');
@@ -76,8 +78,19 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
     });
   };
 
+  const fetchClosedSessions = async () => {
+    try {
+      const raw = await AsyncStorage.getItem('@closed_session_ids');
+      const ids: string[] = raw ? JSON.parse(raw) : [];
+      setClosedSessionIds(ids);
+    } catch (e: any) {
+      logger.error(`Failed to load closed session IDs: ${e.message}`);
+    }
+  };
+
   const fetchRepos = async () => {
     setLoading(true);
+    await fetchClosedSessions();
 
     // Fetch GitHub repositories concurrently
     githubService.getRepositories()
@@ -164,31 +177,38 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
     });
   };
 
+  const getActiveSessionForRepo = (repo: GitHubRepo) => {
+    return activeSessions.find((sess) => {
+      const sourceCtx = sess.sourceContext?.source || '';
+      const lowerSource = sourceCtx.toLowerCase();
+      return (
+        lowerSource.includes(repo.name.toLowerCase()) &&
+        lowerSource.includes(repo.owner.login.toLowerCase())
+      );
+    });
+  };
+
   const handleSelectRepository = (repo: GitHubRepo) => {
     if (!isRepoConnectedToJules(repo)) {
       // If repository isn't linked to Jules, show instructions modal first to avoid 404
       setJustCreatedRepo(repo);
       setGuideModalVisible(true);
     } else {
-      // Get the exact connected source identifier for this repo
-      const targetSourceId = `github-${repo.owner.login}-${repo.name}`.toLowerCase();
-
-      // Filter sessions/threads that match this specific repository source.
-      // In Jules API, session objects contain their connected source URI inside properties.
-      // But since some fields may vary, we filter sessions matching the repo name/owner.
-      const matchedThreads = allSessions.filter((sess) => {
-        const sourceCtx = sess.sourceContext?.source || '';
-        const lowerSource = sourceCtx.toLowerCase();
-
-        return (
-          lowerSource.includes(repo.name.toLowerCase()) &&
-          lowerSource.includes(repo.owner.login.toLowerCase())
+      const activeThread = getActiveSessionForRepo(repo);
+      if (activeThread) {
+        Alert.alert(
+          'Active Thread Exists',
+          `An active thread already exists for ${repo.name}. Redirecting to the active thread.`,
+          [
+            {
+              text: 'OK',
+              onPress: () => onSelectRepo(repo, activeThread.id, true),
+            },
+          ]
         );
-      });
-
-      setRepoSessions(matchedThreads);
-      setTargetRepoForThreads(repo);
-      setThreadsModalVisible(true);
+      } else {
+        onSelectRepo(repo, undefined, repoHasExistingSessions(repo));
+      }
     }
   };
 
@@ -248,7 +268,10 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
     };
   };
 
-  const sortedSessions = [...allSessions].sort((a, b) => {
+  // Filter out closed sessions
+  const activeSessions = allSessions.filter((sess) => !closedSessionIds.includes(sess.id));
+
+  const sortedSessions = [...activeSessions].sort((a, b) => {
     const timeA = new Date(a.updateTime || a.createTime).getTime();
     const timeB = new Date(b.updateTime || b.createTime).getTime();
     return timeB - timeA;
@@ -415,12 +438,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
                     style={styles.repoSelectionCard}
                     onPress={() => {
                       setRepoSelectorVisible(false);
-                      if (!isConnected) {
-                        setJustCreatedRepo(item);
-                        setGuideModalVisible(true);
-                      } else {
-                        onSelectRepo(item, undefined, repoHasExistingSessions(item)); // Clean session
-                      }
+                      handleSelectRepository(item);
                     }}
                   >
                     <View style={styles.repoSelectionHeader}>
